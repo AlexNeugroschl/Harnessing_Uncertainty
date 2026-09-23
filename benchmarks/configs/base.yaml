@@ -1,32 +1,37 @@
 # Shared settings for every ALFWorld arm. Arms differ ONLY in `advantage`.
 # Paper (Qwen2.5-1.5B, full FT, verl-agent): k=k'=1, zeta=0.05, lr=1e-6, KL 0.01, 150 steps.
-# Scaled here for Qwen2.5-0.5B + LoRA on a single 8GB GPU.
+# Scaled here for Qwen2.5-1.5B + LoRA on a single 8GB GPU (0.5B cannot follow the
+# <think>/<action> format: 0/8 valid responses zero-shot vs ~8/8 for 1.5B).
 benchmark: alfworld
 env:
   history_length: 2
 policy:
-  model_name: Qwen/Qwen2.5-0.5B-Instruct
+  model_name: Qwen/Qwen2.5-1.5B-Instruct
   lora_r: 16
   lora_alpha: 32
   max_new_tokens: 256
   temperature: 1.0
   gen_batch_size: 32
-  micro_batch_size: 4
+  micro_batch_size: 2
 advantage:
   k: 1.0
   k_prime: 1.0
   zeta: 0.05
+# Local budget (~15 min/iteration on an RTX 5060 8GB). Paper scale would be
+# iterations 150, games_per_iter 16, max_steps 50 (~35-40 min/iteration here at 4 games).
 train:
-  iterations: 100
-  games_per_iter: 4
+  iterations: 40
+  games_per_iter: 2
   group_size: 8
-  max_steps: 30
+  max_steps: 20
   success_reward: 10.0
   invalid_penalty: 0.1
   lr: 1.0e-5
   kl_coef: 0.01
-  mini_batches: 4
+  mini_batches: 2
+  save_every: 10
 eval:
   split: valid_unseen
+  max_tasks: 48        # fixed random subset of the 134 valid_unseen games; 0 = all
   max_steps: 50
   greedy: true

@@ -47,9 +47,15 @@ def cell(vals) -> str:
     return f"{v.mean():.1f}" if len(v) == 1 else f"{v.mean():.1f} ± {v.std(ddof=1):.1f}"
 
 
+def with_extra_arms(rows, found) -> list:
+    """Known arms in their fixed order, then any other run names found (e.g. custom configs)."""
+    known = {a for a, _ in rows} | {a for a, _ in ARMS} | {"base"}
+    return rows + [(a, a) for a in sorted(found) if a not in known]
+
+
 def table(evals, rows, cols) -> str:
-    head = "| Method | " + " | ".join(cols) + " | All | seeds |\n"
-    head += "|---" * (len(cols) + 3) + "|\n"
+    names = ["Method", *cols, "All", "seeds"]
+    head = "| " + " | ".join(names) + " |\n" + "|---" * len(names) + "|\n"
     body = ""
     for arm, label in rows:
         rs = evals.get(arm, [])
@@ -76,8 +82,11 @@ def plot(curves, out: Path):
     panels = [("success", "Training success rate (5-iter moving avg)"),
               ("entropy_mean", "Mean step entropy H_t (nats)")]
     fig, axes = plt.subplots(1, 2, figsize=(11, 4), dpi=150)
+    extra_colors = iter(["#e87ba4", "#008300", "#4a3aa7", "#e34948"])  # slots 5-8
+    arms = with_extra_arms(list(ARMS), curves)
+    colors = {**COLORS, **{a: next(extra_colors, "#52514e") for a, _ in arms if a not in COLORS}}
     for ax, (key, title) in zip(axes, panels):
-        for arm, label in ARMS:
+        for arm, label in arms:
             runs = curves.get(arm)
             if not runs:
                 continue
@@ -85,11 +94,11 @@ def plot(curves, out: Path):
             y = np.array([[m[key] for m in r[:n]] for r in runs])
             mean = smooth(y.mean(0)) if key == "success" else y.mean(0)
             it = np.arange(1, n + 1)
-            ax.plot(it, mean, color=COLORS[arm], lw=2, label=f"{label} (n={len(runs)})")
+            ax.plot(it, mean, color=colors[arm], lw=2, label=f"{label} (n={len(runs)})")
             if len(runs) > 1:
                 sd = y.std(0) / np.sqrt(len(runs))
                 sd = smooth(sd) if key == "success" else sd
-                ax.fill_between(it, mean - sd, mean + sd, color=COLORS[arm], alpha=0.12, lw=0)
+                ax.fill_between(it, mean - sd, mean + sd, color=colors[arm], alpha=0.12, lw=0)
         ax.set_title(title, fontsize=10, loc="left", color="#0b0b0b")
         ax.set_xlabel("iteration", color="#52514e")
         ax.grid(True, color="#e6e5e0", lw=0.8)
@@ -98,7 +107,11 @@ def plot(curves, out: Path):
         for s in ("left", "bottom"):
             ax.spines[s].set_color("#b5b4ad")
         ax.tick_params(colors="#52514e", labelsize=8)
-    axes[0].legend(frameon=False, fontsize=8, loc="upper left")
+        ax.xaxis.get_major_locator().set_params(integer=True)
+        if key == "success":
+            ax.set_ylim(0, 1)
+    if axes[0].get_legend_handles_labels()[0]:
+        axes[0].legend(frameon=False, fontsize=8, loc="upper left")
     fig.tight_layout()
     fig.savefig(out)
     plt.close(fig)
@@ -114,9 +127,10 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     evals, curves = load(Path(args.runs), args.split)
 
-    main_rows = [("base", "Qwen2.5-0.5B-Instruct (zero-shot)"), ARMS[0], ARMS[1]]
+    main_rows = with_extra_arms([("base", "Qwen2.5-1.5B-Instruct (zero-shot)"), ARMS[0], ARMS[1]],
+                                evals)
     t1 = f"### ALFWorld `{args.split}` success rate (%)\n\n" + table(evals, main_rows, SUBTASKS)
-    t2 = f"### Ablation, ALFWorld `{args.split}` success rate (%)\n\n" + table(evals, ARMS, [])
+    t2 = f"### Ablation, ALFWorld `{args.split}` success rate (%)\n\n" + table(evals, list(ARMS), [])
     (out / "table_alfworld.md").write_text(t1)
     (out / "ablation.md").write_text(t2)
     (out / "summary.json").write_text(json.dumps(evals, indent=2))

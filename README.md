@@ -2,7 +2,7 @@
 
 An implementation of **Entropy-Modulated Policy Gradients (EMPG)** from
 [*Harnessing Uncertainty: Entropy-Modulated Policy Gradients for Long-Horizon LLM Agents*](https://arxiv.org/pdf/2509.09265)
-(Wang et al., arXiv:2509.09265). An LLM agent (Qwen2.5-Instruct + LoRA) is trained with GRPO on **real
+(Wang et al., arXiv:2509.09265). An LLM agent (Qwen2.5-1.5B-Instruct + LoRA) is trained with GRPO on **real
 ALFWorld**, and EMPG reshapes GRPO's advantage using the step-level entropy of the policy being trained.
 
 ## The algorithm
@@ -98,11 +98,13 @@ reward (10 × success), and a 0.1 invalid-action penalty, as in verl-agent.
 
 | | Paper | Here |
 |---|---|---|
-| Model | Qwen2.5-1.5B/7B-Instruct, full fine-tuning | Qwen2.5-0.5B-Instruct, LoRA r=16 |
+| Model | Qwen2.5-1.5B/7B-Instruct, full fine-tuning | Qwen2.5-1.5B-Instruct (same as the paper's ALFWorld row), LoRA r=16 |
 | LR | 1e-6 | 1e-5 (LoRA) |
-| Batch | 16 tasks × group 8 | 4 tasks × group 8 |
-| Steps | 150, 50-turn episodes | 100 iterations, 30-turn training episodes (50 at eval) |
-| Framework | verl-agent (vLLM rollouts) | HF `generate` |
+| Batch | 16 tasks × group 8 | 2 tasks × group 8 |
+| Steps | 150, 50-turn episodes | 40 iterations, 20-turn training episodes (50 at eval) |
+| Eval set | all 134 `valid_unseen` games | fixed random 48-game subset (`eval.max_tasks=0` for all) |
+| Seeds | not stated | 1 (GRPO vs EMPG); ablations and more seeds pending |
+| Framework | verl-agent (vLLM rollouts) | HF `generate` (~15 min per iteration on an RTX 5060 8GB) |
 
 ## Results
 

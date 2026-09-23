@@ -17,7 +17,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 @dataclass
 class PolicyConfig:
-    model_name: str = "Qwen/Qwen2.5-0.5B-Instruct"
+    model_name: str = "Qwen/Qwen2.5-1.5B-Instruct"
     dtype: str = "bfloat16"
     lora_r: int = 16             # 0 disables LoRA (full fine-tuning)
     lora_alpha: int = 32
@@ -130,7 +130,11 @@ class LLMPolicy:
         R = max(len(r) for r in response_ids)
         # Logits at position j predict token j+1. Responses are right-aligned, so
         # only the last R+1 positions matter; the final one predicts past the end.
-        logits = self.model(**batch, use_cache=False, logits_to_keep=R + 1).logits
+        # Explicit positions: with left padding, a plain forward would count pads as
+        # positions, so scores would depend on batch padding and not match generate().
+        pos = (batch["attention_mask"].cumsum(-1) - 1).clamp(min=0)
+        logits = self.model(**batch, position_ids=pos, use_cache=False,
+                            logits_to_keep=R + 1).logits
         logits = logits[:, :-1].float()
         targets = batch["input_ids"][:, n - R:]
         mask = torch.zeros_like(targets, dtype=torch.bool)

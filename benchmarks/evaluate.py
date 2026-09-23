@@ -24,8 +24,11 @@ def evaluate(policy: LLMPolicy, cfg: Config, log=print) -> dict:
     ec = cfg.eval
     bench = make_benchmark(cfg.benchmark, **cfg.env)
     tasks = bench.tasks(ec.split)
-    if ec.max_tasks:
-        tasks = tasks[:ec.max_tasks]
+    if ec.max_tasks and ec.max_tasks < len(tasks):
+        # Games are sorted by task type, so take a fixed random subset (same for
+        # every arm and seed) rather than the first N.
+        pick = np.random.default_rng(0).choice(len(tasks), ec.max_tasks, replace=False)
+        tasks = [tasks[i] for i in sorted(pick)]
     by_type = defaultdict(list)
     for s in range(0, len(tasks), ec.batch_envs):
         chunk = tasks[s:s + ec.batch_envs]

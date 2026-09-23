@@ -79,6 +79,10 @@ def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
                 policy.parameters(), tc.max_grad_norm).item())
             opt.step()
     policy.model.eval()
+    if torch.cuda.is_available():
+        # Hand the update's cached blocks back before the next rollout: on an 8GB
+        # card a bloated cache pushes generation into (slow) shared system memory.
+        torch.cuda.empty_cache()
 
     H = np.array([s.entropy for s in steps])
     rewards = np.array([tr.reward for tr in trajs])
