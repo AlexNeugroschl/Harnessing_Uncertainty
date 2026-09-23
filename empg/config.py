@@ -88,8 +88,13 @@ def _build(cls, data: dict):
     return cls(**kwargs)
 
 
-def load_config(path: str | None = None, overrides: list[str] | None = None) -> Config:
+def load_config(path: str | None = None, overrides: list[str] | None = None,
+                layers: list[str] | None = None) -> Config:
+    """``path`` YAML, then each ``layers`` YAML merged on top (e.g. a size tier),
+    then dotted ``overrides``."""
     data = _read_yaml(Path(path)) if path else {}
+    for layer in layers or []:
+        data = _merge(data, _read_yaml(Path(layer)))
     for ov in overrides or []:
         key, val = ov.split("=", 1)
         node = data

@@ -40,7 +40,7 @@ class LLMPolicy:
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         dtype = getattr(torch, cfg.dtype) if self.device != "cpu" else torch.float32
-        model = AutoModelForCausalLM.from_pretrained(cfg.model_name, torch_dtype=dtype)
+        model = AutoModelForCausalLM.from_pretrained(cfg.model_name, dtype=dtype)
         if cfg.gradient_checkpointing:
             model.gradient_checkpointing_enable()
             model.enable_input_require_grads()

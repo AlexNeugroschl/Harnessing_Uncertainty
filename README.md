@@ -34,6 +34,7 @@ gets `f = 0`.
 ```
 empg/                      the algorithm (benchmark-agnostic)
   advantages.py            GRPO + EMPG advantage estimators (pure numpy)
+  curiosity.py             count-based novelty bonus + exploration metrics (pure numpy; not in the paper)
   policy.py                LLM + LoRA: batched generation, logprob / entropy scoring
   rollout.py               multi-turn episodes, all envs stepped in lockstep
   loss.py                  token-level PPO-clip + k3 KL to the reference (adapter-off) model
@@ -41,12 +42,16 @@ empg/                      the algorithm (benchmark-agnostic)
   prompts.py               verl-agent ALFWorld prompt, <think>/<action> parsing
   config.py                dataclass config, YAML `inherit:`, dotted CLI overrides
   envs/base.py             Env / Benchmark protocols (add WebShop, Deep Search here)
-  envs/alfworld_env.py     real ALFWorld (TextWorld), one env per game file
+  envs/alfworld_env.py     real ALFWorld (TextWorld), one env per game file, + state keys for curiosity
 benchmarks/
-  configs/                 base.yaml + one small file per arm (arms differ only in `advantage:`)
+  configs/base.yaml        shared settings (the `reduced` run size)
+  configs/arms/            one small file per method: grpo, empg, ablations, curiosity arms
+  configs/tiers/           run sizes: smoke (minutes), small (~1.5 h/arm), reduced (~10 h/arm)
   train.py  evaluate.py    train one arm / evaluate per ALFWorld subtask
-  suite.py  report.py      all arms × seeds → paper-style tables + curves in results/
-tests/                     equation invariants, prompt parsing, CPU end-to-end update
+  suite.py  report.py      arms × seeds → paper-style tables, exploration table, curves
+  explore_stats.py         curiosity plan Phase 0: exploration behaviour without training
+docs/curiosity_research_plan.md   research plan for the curiosity extension
+tests/                     equation invariants, curiosity, configs, prompts, CPU end-to-end update
 ```
 
 Extension points:
@@ -69,17 +74,21 @@ source ~/venvs/empg/bin/activate
 
 ## Running
 
+`--config` takes an arm name (a file in `configs/arms/`) or a YAML path. `--tier` sets the run size, and each
+tier writes to its own `runs/<tier>/` folder.
+
 ```bash
-pytest tests/                                                         # math + CPU end-to-end
-python -m benchmarks.train --config benchmarks/configs/smoke.yaml     # few-minute end-to-end on ALFWorld
-python -m benchmarks.train --config benchmarks/configs/alfworld_empg.yaml --seed 0
-python -m benchmarks.evaluate --config benchmarks/configs/alfworld_empg.yaml --seed 0
-python -m benchmarks.suite --seeds 0 1 2                              # base + GRPO + EMPG + ablations
-python -m benchmarks.report                                           # → results/
+pytest tests/                                                    # math + curiosity + CPU end-to-end
+python -m benchmarks.train    --config empg --tier smoke         # minutes, end to end on ALFWorld
+python -m benchmarks.evaluate --config empg --tier smoke
+python -m benchmarks.suite    --tier small --arms grpo empg      # base + arms, train then eval
+python -m benchmarks.suite    --tier reduced --phase paper --seeds 0 1 2
+python -m benchmarks.report   --runs runs/small --out results/small
 ```
 
 Any config value can be overridden from the command line, for example `train.iterations=50`,
-`advantage.zeta=0.1` or `eval.max_tasks=40`.
+`advantage.zeta=0.1` or `advantage.curiosity.weight=0.1`. When an override defines a new variant, also give
+it a new `name=`, so its runs don't overwrite another arm's.
 
 ## Benchmark suite
 
@@ -101,10 +110,57 @@ reward (10 × success), and a 0.1 invalid-action penalty, as in verl-agent.
 | Model | Qwen2.5-1.5B/7B-Instruct, full fine-tuning | Qwen2.5-1.5B-Instruct (same as the paper's ALFWorld row), LoRA r=16 |
 | LR | 1e-6 | 1e-5 (LoRA) |
 | Batch | 16 tasks × group 8 | 2 tasks × group 8 |
-| Steps | 150, 50-turn episodes | 40 iterations, 20-turn training episodes (50 at eval) |
+| Steps | 150, 50-turn episodes | 40 iterations, 20-turn training episodes (50 at eval), `reduced` tier |
 | Eval set | all 134 `valid_unseen` games | fixed random 48-game subset (`eval.max_tasks=0` for all) |
 | Seeds | not stated | 1 (GRPO vs EMPG); ablations and more seeds pending |
 | Framework | verl-agent (vLLM rollouts) | HF `generate` (~15 min per iteration on an RTX 5060 8GB) |
+
+## Curiosity extension (research in progress)
+
+The research question is whether a curiosity bonus, for reaching states the agent hasn't seen, helps on
+long-horizon, sparse-reward tasks. [docs/curiosity_research_plan.md](docs/curiosity_research_plan.md) has the
+hypotheses, the phases and the metrics. Curiosity is an extra term in the same advantage:
+
+```
+A_mod(i,t) = A_i · g(H_t) + ζ · f(H_t+1) + η · c_t        c_t = novelty of s_t+1 (1/√n or first-visit)
+```
+
+With `η = 0` the result is bit-identical to GRPO/EMPG. That is tested.
+
+- **State keys** ([empg/envs/alfworld_env.py](empg/envs/alfworld_env.py)):
+  - `parsed` (non-privileged, the default): location, inventory, object placements, opened receptacles and
+    conditions, all tracked from actions and their feedback.
+  - `physical` / `knowledge` (oracle): TextWorld facts with history markers removed (`checked`, `not_*`).
+  - `obs`: the observation text.
+
+  On random walks, the parsed key misses a physical change in 1 of 415 states. It is finer than the oracle
+  where ALFWorld puts several receptacles at one location.
+- **Knobs** (`advantage.curiosity.*` in [base.yaml](benchmarks/configs/base.yaml)):
+  - `scope`: `episodic` or `group`, i.e. novel compared with sibling rollouts
+  - `bonus`
+  - `mode`: step term or trajectory reward
+  - `schedule`: constant, linear or exp
+  - `gate`: `no_success_signal` applies curiosity only in groups whose rollouts all share one outcome
+  - `modulate`: by the policy's confidence
+  - `cap`
+- **Arms** (`configs/arms/`): `grpo_memory` (the visited-locations prompt control), `grpo_cur_episodic`,
+  `grpo_cur_group`, `grpo_cur_oracle`, `empg_cur_episodic`, and `empg_seek_uncertainty` (ζ < 0).
+- **Metrics:** every run logs:
+  - revisit and no-op rate
+  - unique states per episode
+  - group coverage
+  - P(group has ≥1 success)
+  - no-signal groups
+  - steps to success
+  - intrinsic share of |A|
+
+  `report` writes them to `exploration.md`.
+
+```bash
+python -m benchmarks.explore_stats --config grpo --tier small --games 24   # Phase 0 go/no-go (~1 h)
+python -m benchmarks.suite --tier small --phase screen                     # Phase 2 screening (8 arms)
+python -m benchmarks.suite --tier small --arms grpo_cur_group advantage.curiosity.gate=no_success_signal     name=grpo_cur_group_gated                                              # Phase 3 variant
+```
 
 ## Results
 

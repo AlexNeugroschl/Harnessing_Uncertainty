@@ -73,10 +73,11 @@ def test_score_matches_forward(policy):
     torch.testing.assert_close(ref[0], lp[0], atol=1e-4, rtol=0)
 
 
-@pytest.mark.parametrize("method", ["grpo", "empg"])
-def test_one_update(policy, method):
+@pytest.mark.parametrize("method,curiosity", [("grpo", 0.0), ("empg", 0.0), ("empg", 0.1)])
+def test_one_update(policy, method, curiosity):
     pol, cfg = policy
     cfg.advantage.method = method
+    cfg.advantage.curiosity.weight = curiosity  # FakeEnv has no state keys -> "obs" fallback
     cfg.train.mini_batches = 2
     torch.manual_seed(0)
     trajs = run_episodes(pol, FakeBench(), ["open the door"] * 4, [0, 0, 1, 1], max_steps=3)
@@ -89,7 +90,8 @@ def test_one_update(policy, method):
                    np.random.default_rng(0))
     after = pol.parameters()
 
-    assert all(np.isfinite(v) for v in stats.values())
+    assert all(np.isfinite(v) for k, v in stats.items() if k != "success_len")
+    assert (stats["intrinsic_share"] > 0) == (curiosity > 0)
     assert stats["entropy_mean"] > 0
     assert all(s.entropy > 0 for t in trajs for s in t.steps)
     assert any(not torch.equal(a, b) for a, b in zip(before, after))

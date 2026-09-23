@@ -1,11 +1,12 @@
 """Aggregate runs into paper-style tables and training curves.
 
-    python -m benchmarks.report [--runs runs] [--split valid_unseen] [--out results]
+    python -m benchmarks.report [--runs runs/reduced] [--split valid_unseen] [--out results] [--arms ...]
 
 Writes:
     results/table_alfworld.md   per-subtask success (paper Table 1 layout)
     results/ablation.md         GRPO vs g-only vs f-only vs full EMPG (paper ablation)
-    results/training_curves.png train success + mean step entropy per iteration
+    results/exploration.md      exploration metrics from training (curiosity plan Sec. 6)
+    results/training_curves.png train success, step entropy, revisit rate, P(group has a success)
     results/summary.json        all numbers above
 """
 
@@ -21,8 +22,23 @@ import numpy as np
 SUBTASKS = ["Pick", "Look", "Clean", "Heat", "Cool", "Pick2"]
 ARMS = [("grpo", "GRPO"), ("empg", "GRPO + EMPG"),
         ("empg_g_only", "+ gradient scaling g only"), ("empg_f_only", "+ clarity bonus f only")]
-# Fixed categorical order (identity follows the arm, never its rank).
-COLORS = {"grpo": "#2a78d6", "empg": "#eb6834", "empg_g_only": "#1baf7a", "empg_f_only": "#eda100"}
+LABELS = {
+    "grpo_memory": "GRPO + visited-locations memory",
+    "grpo_cur_episodic": "GRPO + curiosity (episodic)",
+    "grpo_cur_group": "GRPO + curiosity (group)",
+    "grpo_cur_oracle": "GRPO + curiosity (oracle state)",
+    "empg_cur_episodic": "EMPG + curiosity (episodic)",
+    "empg_seek_uncertainty": "EMPG, clarity sign flipped",
+    **dict(ARMS),
+}
+# Fixed categorical order (identity follows the arm, never its rank). Slots 1-8;
+# past 8 arms, filter with --arms rather than inventing hues.
+PALETTE = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
+COLORS = {"grpo": PALETTE[0], "empg": PALETTE[1], "empg_g_only": PALETTE[2], "empg_f_only": PALETTE[3]}
+EXPLORE_COLS = [("success", "train success"), ("revisit_rate", "revisit rate"), ("noop_rate", "no-op rate"),
+                ("unique_states", "unique states / ep"), ("group_coverage", "group coverage"),
+                ("any_success_frac", "P(group ≥1 success)"), ("no_signal_frac", "no-signal groups"),
+                ("success_len", "steps to success"), ("intrinsic_share", "intrinsic share")]
 
 
 def load(runs: Path, split: str):
@@ -50,7 +66,7 @@ def cell(vals) -> str:
 def with_extra_arms(rows, found) -> list:
     """Known arms in their fixed order, then any other run names found (e.g. custom configs)."""
     known = {a for a, _ in rows} | {a for a, _ in ARMS} | {"base"}
-    return rows + [(a, a) for a in sorted(found) if a not in known]
+    return rows + [(a, LABELS.get(a, a)) for a in sorted(found) if a not in known]
 
 
 def table(evals, rows, cols) -> str:
@@ -80,24 +96,28 @@ def plot(curves, out: Path):
     import matplotlib.pyplot as plt
 
     panels = [("success", "Training success rate (5-iter moving avg)"),
-              ("entropy_mean", "Mean step entropy H_t (nats)")]
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4), dpi=150)
-    extra_colors = iter(["#e87ba4", "#008300", "#4a3aa7", "#e34948"])  # slots 5-8
-    arms = with_extra_arms(list(ARMS), curves)
-    colors = {**COLORS, **{a: next(extra_colors, "#52514e") for a, _ in arms if a not in COLORS}}
+              ("entropy_mean", "Mean step entropy H_t (nats)"),
+              ("revisit_rate", "Revisit rate (5-iter moving avg)"),
+              ("any_success_frac", "P(group has ≥1 success) (5-iter moving avg)")]
+    smoothed = {"success", "revisit_rate", "any_success_frac"}
+    fig, axes = plt.subplots(2, 2, figsize=(11, 8), dpi=150)
+    axes = axes.ravel()
+    arms = [(a, l) for a, l in with_extra_arms(list(ARMS), curves) if a in curves]
+    spare = iter(c for c in PALETTE if c not in {COLORS.get(a) for a, _ in arms})
+    colors = {a: COLORS.get(a) or next(spare, "#52514e") for a, _ in arms}
     for ax, (key, title) in zip(axes, panels):
         for arm, label in arms:
-            runs = curves.get(arm)
+            runs = [r for r in curves[arm] if r and key in r[0]]
             if not runs:
                 continue
             n = min(len(r) for r in runs)
             y = np.array([[m[key] for m in r[:n]] for r in runs])
-            mean = smooth(y.mean(0)) if key == "success" else y.mean(0)
+            mean = smooth(y.mean(0)) if key in smoothed else y.mean(0)
             it = np.arange(1, n + 1)
             ax.plot(it, mean, color=colors[arm], lw=2, label=f"{label} (n={len(runs)})")
             if len(runs) > 1:
                 sd = y.std(0) / np.sqrt(len(runs))
-                sd = smooth(sd) if key == "success" else sd
+                sd = smooth(sd) if key in smoothed else sd
                 ax.fill_between(it, mean - sd, mean + sd, color=colors[arm], alpha=0.12, lw=0)
         ax.set_title(title, fontsize=10, loc="left", color="#0b0b0b")
         ax.set_xlabel("iteration", color="#52514e")
@@ -108,7 +128,7 @@ def plot(curves, out: Path):
             ax.spines[s].set_color("#b5b4ad")
         ax.tick_params(colors="#52514e", labelsize=8)
         ax.xaxis.get_major_locator().set_params(integer=True)
-        if key == "success":
+        if key in smoothed:
             ax.set_ylim(0, 1)
     if axes[0].get_legend_handles_labels()[0]:
         axes[0].legend(frameon=False, fontsize=8, loc="upper left")
@@ -117,15 +137,36 @@ def plot(curves, out: Path):
     plt.close(fig)
 
 
+def explore_table(curves, last: int = 5) -> str:
+    """Mean of each exploration metric over the last ``last`` iterations, averaged over seeds."""
+    names = ["Method", *(label for _, label in EXPLORE_COLS)]
+    out = "| " + " | ".join(names) + " |\n" + "|---" * len(names) + "|\n"
+    for arm, label in with_extra_arms(list(ARMS), curves):
+        runs = curves.get(arm)
+        if not runs:
+            continue
+        cells = []
+        for key, _ in EXPLORE_COLS:
+            vals = [np.nanmean([m.get(key, np.nan) for m in r[-last:]]) for r in runs]
+            vals = [v for v in vals if np.isfinite(v)]
+            cells.append(f"{np.mean(vals):.2f}" if vals else "–")
+        out += f"| {label} | " + " | ".join(cells) + " |\n"
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--runs", default="runs")
+    ap.add_argument("--runs", default="runs/reduced")
     ap.add_argument("--split", default="valid_unseen")
     ap.add_argument("--out", default="results")
+    ap.add_argument("--arms", nargs="+", help="only these runs (plus base), e.g. to keep plots ≤8 series")
     args = ap.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     evals, curves = load(Path(args.runs), args.split)
+    if args.arms:
+        evals = {a: v for a, v in evals.items() if a in args.arms or a == "base"}
+        curves = {a: v for a, v in curves.items() if a in args.arms}
 
     main_rows = with_extra_arms([("base", "Qwen2.5-1.5B-Instruct (zero-shot)"), ARMS[0], ARMS[1]],
                                 evals)
@@ -133,10 +174,12 @@ def main():
     t2 = f"### Ablation, ALFWorld `{args.split}` success rate (%)\n\n" + table(evals, list(ARMS), [])
     (out / "table_alfworld.md").write_text(t1)
     (out / "ablation.md").write_text(t2)
+    t3 = "### Exploration during training (mean of last 5 iterations)\n\n" + explore_table(curves)
+    (out / "exploration.md").write_text(t3)
     (out / "summary.json").write_text(json.dumps(evals, indent=2))
     if curves:
         plot(curves, out / "training_curves.png")
-    print(t1 + "\n" + t2)
+    print(t1 + "\n" + t2 + "\n" + t3)
 
 
 if __name__ == "__main__":

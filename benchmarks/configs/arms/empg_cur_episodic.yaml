@@ -1,0 +1,10 @@
+# Plan H4: EMPG + curiosity. Episodic is a placeholder: switch `scope` to the
+# better of grpo_cur_episodic / grpo_cur_group after Phase 2 screening.
+inherit: ../base.yaml
+name: empg_cur_episodic
+advantage:
+  method: empg
+  curiosity:
+    weight: 0.05
+    key: parsed
+    scope: episodic

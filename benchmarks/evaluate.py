@@ -1,7 +1,7 @@
 """Evaluate a policy on a benchmark split; reports success per task type (paper Table 1).
 
-    python -m benchmarks.evaluate --config benchmarks/configs/alfworld_empg.yaml --seed 0
-    python -m benchmarks.evaluate --config benchmarks/configs/base.yaml --base   # zero-shot model
+    python -m benchmarks.evaluate --config empg --tier small --seed 0
+    python -m benchmarks.evaluate --config benchmarks/configs/base.yaml --tier small --base  # zero-shot
 """
 
 from __future__ import annotations
@@ -13,7 +13,8 @@ from pathlib import Path
 
 import numpy as np
 
-from empg.config import Config, load_config
+from benchmarks.common import add_args, load
+from empg.config import Config
 from empg.envs.base import make_benchmark
 from empg.policy import LLMPolicy
 from empg.rollout import run_episodes
@@ -51,13 +52,10 @@ def eval_path(cfg: Config, base: bool = False) -> Path:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", required=True)
-    ap.add_argument("--seed", type=int, default=0)
+    add_args(ap)
     ap.add_argument("--base", action="store_true", help="evaluate the untrained model")
-    ap.add_argument("overrides", nargs="*", help="dotted overrides, e.g. eval.max_tasks=20")
     args = ap.parse_args()
-    cfg = load_config(args.config, args.overrides)
-    cfg.seed = args.seed
+    cfg = load(args.config, args.tier, args.overrides, args.seed)
     seed_everything(cfg.seed)
     policy = LLMPolicy(cfg.policy)
     if not args.base:

@@ -1,6 +1,5 @@
-# Tiny end-to-end check (a few minutes): python -m benchmarks.train --config benchmarks/configs/smoke.yaml
-inherit: alfworld_empg.yaml
-name: smoke
+# Minutes: checks an arm runs end to end, e.g.
+#   python -m benchmarks.train --config benchmarks/configs/arms/empg.yaml --tier smoke
 out_dir: runs/smoke
 policy:
   max_new_tokens: 96

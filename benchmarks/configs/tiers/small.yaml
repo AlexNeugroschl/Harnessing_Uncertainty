@@ -1,0 +1,9 @@
+# Screening tier (~1.5 h per arm): proves learning happens, too noisy for fine comparisons.
+out_dir: runs/small
+train:
+  iterations: 10
+  max_steps: 10
+  save_every: 0
+eval:
+  max_tasks: 16
+  max_steps: 30

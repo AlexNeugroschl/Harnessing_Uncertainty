@@ -16,7 +16,11 @@ class Env(Protocol):
 
     def step(self, action: str) -> tuple[str, float, bool, dict]:
         """Returns (observation, reward, done, info). info must contain
-        'admissible' and 'won' (bool, task success)."""
+        'admissible' and 'won' (bool, task success).
+
+        Optional (reset and step): info['state_keys'], a dict of named hashable
+        state identifiers used by curiosity (e.g. {'parsed': ..., 'physical': ...}).
+        The rollout always adds 'obs' (the observation text) as a fallback key."""
 
     def close(self) -> None: ...
 

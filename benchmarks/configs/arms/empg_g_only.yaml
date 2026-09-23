@@ -1,5 +1,5 @@
 # Ablation: self-calibrating gradient scaling only (Eq. 10), no clarity bonus.
-inherit: base.yaml
+inherit: ../base.yaml
 name: empg_g_only
 advantage:
   method: empg

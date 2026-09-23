@@ -1,0 +1,7 @@
+# EMPG with the clarity bonus sign flipped: reward moving to *uncertain* states
+# (entropy-seeking exploration) instead of confident ones.
+inherit: ../base.yaml
+name: empg_seek_uncertainty
+advantage:
+  method: empg
+  zeta: -0.05

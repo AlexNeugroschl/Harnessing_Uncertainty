@@ -1,0 +1,9 @@
+# Upper bound on the state key: episodic novelty on the oracle physical state (TextWorld facts).
+inherit: ../base.yaml
+name: grpo_cur_oracle
+advantage:
+  method: grpo
+  curiosity:
+    weight: 0.05
+    key: physical
+    scope: episodic

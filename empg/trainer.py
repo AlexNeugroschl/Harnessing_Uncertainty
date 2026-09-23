@@ -10,8 +10,9 @@ import time
 import numpy as np
 import torch
 
-from empg.advantages import compute_advantages
+from empg.advantages import compute_advantages, normalize_entropy
 from empg.config import Config
+from empg.curiosity import exploration_stats, intrinsic_rewards
 from empg.envs.base import make_benchmark
 from empg.loss import policy_loss
 from empg.policy import LLMPolicy
@@ -31,8 +32,14 @@ def _right_aligned(rows: list[torch.Tensor], T: int, device) -> torch.Tensor:
     return out.to(device)
 
 
+# Exploration metrics always use the non-privileged key, so every arm is measured
+# the same way whatever key its curiosity bonus uses. Envs without state keys
+# fall back to the observation text.
+METRICS_KEY = "parsed"
+
+
 def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
-           rng: np.random.Generator) -> dict:
+           rng: np.random.Generator, iteration: int = 1) -> dict:
     """One policy-gradient update on a batch of trajectories. Returns stats."""
     tc = cfg.train
     steps = [s for tr in trajs for s in tr.steps]
@@ -48,9 +55,17 @@ def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
     if tc.kl_coef > 0 and policy.use_lora:  # reference = base model (adapter off)
         ref_logp, _ = policy.score(P, R, with_entropy=False, reference=True)
 
-    adv = compute_advantages(
-        [tr.reward for tr in trajs], [tr.group for tr in trajs], step_traj,
-        [s.entropy for s in steps], cfg.advantage)
+    groups = [tr.group for tr in trajs]
+    won = [tr.won for tr in trajs]
+    step_h = [s.entropy for s in steps]
+    cur = cfg.advantage.curiosity
+    intrinsic = None
+    if cur.weight != 0:
+        intrinsic = intrinsic_rewards(
+            [tr.key_seq(cur.key) for tr in trajs], groups, won, cur, iteration,
+            tc.iterations, h_norm=normalize_entropy(step_h))
+    adv = compute_advantages([tr.reward for tr in trajs], groups, step_traj, step_h,
+                             cfg.advantage, intrinsic=intrinsic)
 
     policy.model.train()
     dev, mb_size = policy.device, policy.cfg.micro_batch_size
@@ -84,12 +99,17 @@ def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
         # card a bloated cache pushes generation into (slow) shared system memory.
         torch.cuda.empty_cache()
 
-    H = np.array([s.entropy for s in steps])
+    H = np.array(step_h)
     rewards = np.array([tr.reward for tr in trajs])
-    groups = np.array([tr.group for tr in trajs])
+    groups = np.array(groups)
     flat = np.mean([np.ptp(rewards[groups == g]) == 0 for g in np.unique(groups)])
     n = max(sums["tokens"], 1)
+    explore = exploration_stats([tr.key_seq(METRICS_KEY) for tr in trajs], groups, won)
+    share = (float(np.abs(intrinsic).mean() / max(np.abs(adv).mean(), 1e-8))
+             if intrinsic is not None else 0.0)
     return {
+        **explore,
+        "intrinsic_share": share,  # mean |curiosity term| / mean |final advantage|
         "success": float(np.mean([tr.won for tr in trajs])),
         "reward": float(rewards.mean()),
         "ep_len": float(np.mean([len(tr.steps) for tr in trajs])),
@@ -116,8 +136,12 @@ def train(cfg: Config, log=print) -> LLMPolicy:
     opt = torch.optim.AdamW(policy.parameters(), lr=cfg.train.lr,
                             weight_decay=cfg.train.weight_decay)
     tc = cfg.train
-    log(f"[{cfg.name} s{cfg.seed}] {len(train_tasks)} train tasks, "
-        f"advantage={cfg.advantage.method} (g={cfg.advantage.use_g}, f={cfg.advantage.use_f})")
+    ac, cur = cfg.advantage, cfg.advantage.curiosity
+    log(f"[{cfg.name} s{cfg.seed}] {len(train_tasks)} train tasks, advantage={ac.method}"
+        + (f" (g={ac.use_g}, f={ac.use_f}, zeta={ac.zeta})" if ac.method == "empg" else "")
+        + f", curiosity eta={cur.weight}"
+        + (f" ({cur.key}/{cur.scope}/{cur.bonus}/{cur.mode}, schedule={cur.schedule}, "
+           f"gate={cur.gate})" if cur.weight else ""))
 
     with open(run_dir / "metrics.jsonl", "w") as mf:
         for it in range(1, tc.iterations + 1):
@@ -128,13 +152,14 @@ def train(cfg: Config, log=print) -> LLMPolicy:
             trajs = run_episodes(policy, bench, tasks, groups, tc.max_steps,
                                  tc.success_reward, tc.invalid_penalty)
             t1 = time.time()
-            stats = update(policy, opt, trajs, cfg, rng)
+            stats = update(policy, opt, trajs, cfg, rng, iteration=it)
             stats.update(iteration=it, t_rollout=t1 - t0, t_update=time.time() - t1)
             mf.write(json.dumps(stats) + "\n")
             mf.flush()
             log(f"it {it:4d} | succ {stats['success']:.2f} | R {stats['reward']:+.2f} "
                 f"| len {stats['ep_len']:.1f} | inval {stats['invalid_rate']:.2f} "
                 f"| H {stats['entropy_mean']:.3f} | kl {stats['kl']:.4f} "
+                f"| revisit {stats['revisit_rate']:.2f} | anysucc {stats['any_success_frac']:.2f} "
                 f"| {stats['t_rollout']:.0f}s+{stats['t_update']:.0f}s")
             if tc.save_every and it % tc.save_every == 0:
                 policy.save(str(run_dir / "adapter"))

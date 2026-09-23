@@ -1,0 +1,8 @@
+# Plan H6 control: GRPO + a prompt line listing visited locations (no curiosity).
+# Differs from `grpo` in the prompt, not the advantage.
+inherit: ../base.yaml
+name: grpo_memory
+env:
+  memory: true
+advantage:
+  method: grpo

@@ -1,0 +1,9 @@
+# Plan H1: GRPO + episodic count novelty on the non-privileged parsed state.
+inherit: ../base.yaml
+name: grpo_cur_episodic
+advantage:
+  method: grpo
+  curiosity:
+    weight: 0.05
+    key: parsed
+    scope: episodic

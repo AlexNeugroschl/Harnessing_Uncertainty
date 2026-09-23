@@ -30,10 +30,33 @@ _ACTION_RE = re.compile(r"<action>(.*?)</action>", re.DOTALL | re.IGNORECASE)
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
 
+def visited_locations(history: list[tuple[str, str]], observation: str) -> list[str]:
+    """Locations reached by a successful ``go to`` so far, in first-visit order.
+
+    ``history[i]`` is (observation before action i, action i); the result of
+    action i is the next entry's observation, or ``observation`` for the last.
+    """
+    visited = []
+    for i, (_, action) in enumerate(history):
+        result = history[i + 1][0] if i + 1 < len(history) else observation
+        if action.startswith("go to ") and result.startswith("You arrive"):
+            loc = action[len("go to "):]
+            if loc not in visited:
+                visited.append(loc)
+    return visited
+
+
 def alfworld_prompt(task: str, observation: str, admissible: list[str],
-                    history: list[tuple[str, str]], history_length: int = 2) -> str:
-    """Build the user prompt. ``history`` is [(observation, action), ...] so far."""
+                    history: list[tuple[str, str]], history_length: int = 2,
+                    visited: list[str] | None = None) -> str:
+    """Build the user prompt. ``history`` is [(observation, action), ...] so far.
+
+    ``visited`` (memory baseline, not in verl-agent) adds a line listing every
+    location visited this episode, which the 2-step history otherwise forgets.
+    """
     adm = ", ".join(f"'{a}'" for a in admissible if a not in ("help",))
+    if visited:
+        observation = f"{observation}\nLocations you have already visited: {', '.join(visited)}."
     if not history:
         return ALFWORLD_TEMPLATE_NO_HIS.format(observation=observation, admissible=adm)
     recent = history[-history_length:]

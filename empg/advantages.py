@@ -16,13 +16,18 @@ Equation map
     Eq. 11  clarity_f            future-clarity bonus on H_{t+1}
     Eq. 8   A_mod = A_i * g(H_t) + zeta * f(H_{t+1})
     Eq. 13  A_final = A_mod - batch mean
+
+Optional, not in the paper: a curiosity term ``eta * c_t`` (``empg/curiosity.py``)
+added to A_mod before Eq. 13, or to the outcome reward before Eq. 4.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
+
+from empg.curiosity import CuriosityConfig
 
 EPS = 1e-6
 
@@ -35,6 +40,7 @@ class AdvantageConfig:
     k: float = 1.0            # Eq. 10 exponent
     k_prime: float = 1.0      # Eq. 11 exponent
     zeta: float = 0.05        # Eq. 8 bonus weight (0.05 ALFWorld/WebShop, 0.1 Deep Search)
+    curiosity: CuriosityConfig = field(default_factory=CuriosityConfig)  # not in the paper
 
 
 def grpo_advantages(traj_rewards, group_ids, eps: float = EPS) -> np.ndarray:
@@ -93,14 +99,30 @@ def next_step_entropy(h_norm, step_traj) -> np.ndarray:
 
 
 def compute_advantages(traj_rewards, group_ids, step_traj, step_entropy,
-                       cfg: AdvantageConfig) -> np.ndarray:
-    """Per-step advantages for the batch, according to ``cfg.method``."""
+                       cfg: AdvantageConfig, intrinsic=None) -> np.ndarray:
+    """Per-step advantages for the batch, according to ``cfg.method``.
+
+    ``intrinsic`` is an optional, already-weighted per-step curiosity term
+    (``empg.curiosity.intrinsic_rewards``). With ``cfg.curiosity.mode ==
+    "trajectory"`` its per-episode mean is added to the outcome reward before
+    Eq. 4; otherwise it is added per step (then centred, like Eq. 13).
+    """
     step_traj = np.asarray(step_traj)
-    a_traj = grpo_advantages(traj_rewards, group_ids)
+    rewards = np.asarray(traj_rewards, dtype=np.float64)
+    if intrinsic is not None and cfg.curiosity.mode == "trajectory":
+        per_traj = np.bincount(step_traj, weights=intrinsic, minlength=len(rewards))
+        rewards = rewards + per_traj / np.maximum(np.bincount(step_traj, minlength=len(rewards)), 1)
+        intrinsic = None
+    elif intrinsic is not None and cfg.curiosity.mode != "step":
+        raise ValueError(f"unknown curiosity mode: {cfg.curiosity.mode!r}")
+
+    a_traj = grpo_advantages(rewards, group_ids)
     a_step = a_traj[step_traj]  # GRPO: outcome advantage broadcast to every step
 
     if cfg.method == "grpo":
-        return a_step
+        if intrinsic is None:
+            return a_step
+        return a_step + (intrinsic - np.mean(intrinsic))
     if cfg.method != "empg":
         raise ValueError(f"unknown advantage method: {cfg.method!r}")
 
@@ -108,4 +130,6 @@ def compute_advantages(traj_rewards, group_ids, step_traj, step_entropy,
     a_mod = a_step * scale_g(h_norm, cfg.k) if cfg.use_g else a_step.copy()
     if cfg.use_f:
         a_mod += cfg.zeta * clarity_f(next_step_entropy(h_norm, step_traj), cfg.k_prime)
+    if intrinsic is not None:
+        a_mod += intrinsic
     return a_mod - a_mod.mean()  # Eq. 13

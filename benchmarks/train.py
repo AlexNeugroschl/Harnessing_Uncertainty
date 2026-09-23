@@ -1,24 +1,21 @@
 """Train one arm.
 
-    python -m benchmarks.train --config benchmarks/configs/alfworld_empg.yaml --seed 0
-    python -m benchmarks.train --config benchmarks/configs/alfworld_grpo.yaml train.iterations=50
+    python -m benchmarks.train --config empg --tier smoke
+    python -m benchmarks.train --config grpo_cur_group --tier small --seed 1
+    python -m benchmarks.train --config empg --tier small advantage.curiosity.weight=0.1 name=empg_eta01
 """
 
 import argparse
 
-from empg.config import load_config
+from benchmarks.common import add_args, load
 from empg.trainer import train
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", required=True)
-    ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("overrides", nargs="*", help="dotted overrides, e.g. advantage.zeta=0.1")
+    add_args(ap)
     args = ap.parse_args()
-    cfg = load_config(args.config, args.overrides)
-    cfg.seed = args.seed
-    train(cfg)
+    train(load(args.config, args.tier, args.overrides, args.seed))
 
 
 if __name__ == "__main__":

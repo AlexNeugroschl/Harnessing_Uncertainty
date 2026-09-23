@@ -1,10 +1,12 @@
-# Shared settings for every ALFWorld arm. Arms differ ONLY in `advantage`.
+# Shared settings for every ALFWorld arm (configs/arms/). Arms differ only in `advantage`,
+# except grpo_memory (prompt change). Run size comes from configs/tiers/ (smoke, small, reduced).
 # Paper (Qwen2.5-1.5B, full FT, verl-agent): k=k'=1, zeta=0.05, lr=1e-6, KL 0.01, 150 steps.
 # Scaled here for Qwen2.5-1.5B + LoRA on a single 8GB GPU (0.5B cannot follow the
 # <think>/<action> format: 0/8 valid responses zero-shot vs ~8/8 for 1.5B).
 benchmark: alfworld
 env:
   history_length: 2
+  memory: false          # true: prompt lists visited locations (curiosity plan H6 control)
 policy:
   model_name: Qwen/Qwen2.5-1.5B-Instruct
   lora_r: 16
@@ -17,6 +19,16 @@ advantage:
   k: 1.0
   k_prime: 1.0
   zeta: 0.05
+  curiosity:             # not in the paper; see docs/curiosity_research_plan.md
+    weight: 0.0          # eta; 0 = off (identical to GRPO/EMPG)
+    key: parsed          # parsed | physical (oracle) | knowledge (oracle) | obs
+    scope: episodic      # episodic | group
+    bonus: inv_sqrt      # inv_sqrt | first_visit
+    mode: step           # step (advantage term) | trajectory (added to outcome reward)
+    schedule: constant   # constant | linear | exp
+    gate: none           # none | no_success_signal
+    modulate: none       # none | confident | uncertain
+    cap: 0.0             # max bonus per episode; 0 = none
 # Local budget (~15 min/iteration on an RTX 5060 8GB). Paper scale would be
 # iterations 150, games_per_iter 16, max_steps 50 (~35-40 min/iteration here at 4 games).
 train:

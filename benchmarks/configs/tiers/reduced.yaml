@@ -1,0 +1,2 @@
+# Final-eval tier (~10 h per arm on an RTX 5060 8GB): base.yaml as is.
+out_dir: runs/reduced

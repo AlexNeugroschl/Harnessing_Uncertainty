@@ -1,0 +1,9 @@
+# Plan H3: GRPO + within-group novelty (states the sibling rollouts did not reach).
+inherit: ../base.yaml
+name: grpo_cur_group
+advantage:
+  method: grpo
+  curiosity:
+    weight: 0.05
+    key: parsed
+    scope: group
