@@ -1,0 +1,10 @@
+# torch is installed separately with CUDA 12.8 wheels (see scripts/setup_wsl.sh):
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
+transformers>=4.50
+peft>=0.13
+accelerate>=1.0
+alfworld>=0.4.2
+pyyaml>=6.0
+numpy>=1.26
+matplotlib>=3.8
+pytest>=8.0

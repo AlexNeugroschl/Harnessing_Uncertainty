@@ -1,0 +1,6 @@
+inherit: base.yaml
+name: empg
+advantage:
+  method: empg
+  use_g: true
+  use_f: true

@@ -1,0 +1,7 @@
+# Ablation: future-clarity bonus only (Eq. 11), no gradient scaling.
+inherit: base.yaml
+name: empg_f_only
+advantage:
+  method: empg
+  use_g: false
+  use_f: true

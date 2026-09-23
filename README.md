@@ -1,189 +1,109 @@
-# Harnessing Uncertainty — an EMPG demo
+# Harnessing Uncertainty
 
-A small, runnable demonstration of **Entropy-Modulated Policy Gradients (EMPG)**, from
+An implementation of **Entropy-Modulated Policy Gradients (EMPG)** from
 [*Harnessing Uncertainty: Entropy-Modulated Policy Gradients for Long-Horizon LLM Agents*](https://arxiv.org/pdf/2509.09265)
-(Wang et al., arXiv:2509.09265).
+(Wang et al., arXiv:2509.09265). An LLM agent (Qwen2.5-Instruct + LoRA) is trained with GRPO on **real
+ALFWorld**, and EMPG reshapes GRPO's advantage using the step-level entropy of the policy being trained.
 
-Step-level uncertainty is **measured from a real LLM** (llama3.2 served by Ollama, via its
-token logprobs), and those measurements drive **real policy-gradient updates** on a small
-PyTorch policy. Everything runs on CPU in seconds after a one-time warm-up of ~32 LLM calls.
+## The algorithm
 
----
+A long-horizon agent receives one sparse outcome reward per episode. GRPO spreads that single scalar evenly over
+every step. The paper also shows (Prop. 1) that the size of a softmax policy gradient is coupled to entropy:
+confident steps get small updates and uncertain steps get large, noisy ones. EMPG fixes both problems with the
+agent's own uncertainty. The equation numbers below are the paper's, and each maps to one function in
+[empg/advantages.py](empg/advantages.py):
 
-## The problem, and what EMPG does about it
-
-A long-horizon agent gets one sparse number at the end — did the task succeed? — and has to
-work out which of its ten intermediate steps deserve the credit. Plain GRPO smears that single
-scalar uniformly across every step.
-
-Worse, as the paper observes, the *magnitude* of a policy gradient is naturally coupled to the
-policy's entropy: confident steps produce small updates and uncertain ones produce large,
-destabilising updates. That is backwards from what you want.
-
-EMPG re-weights each step using its measured uncertainty (all equation numbers are the paper's):
-
-```
-H_norm      = (H - min H) / (max H - min H + eps)            (Eq. 12)
-g(H_t)      = exp(-k*H_norm) / mean_batch[exp(-k*H_norm)]    (Eq. 10)   mean is exactly 1
-f(H_t+1)    = exp(-k'*H_norm,t+1)                            (Eq. 11)
-A_mod(i,t)  = A_i * g(H_t) + zeta * f(H_t+1)                 (Eq. 8)
-A_final     = A_mod - mean_batch[A_mod]                       (Eq. 13)
-```
-
-`g` multiplies, so it scales magnitude and *preserves sign*. All three behaviours from the
-abstract fall out of that one term:
-
-| step | entropy | `g` | effect on the update |
-|---|---|---|---|
-| confident **and correct** (`A>0`) | low | `>1` | **amplified** |
-| confident **but wrong** (`A<0`) | low | `>1` | **penalised harder** — "hallucinated confidence" |
-| uncertain (either sign) | high | `<1` | **damped** |
-
-`f` is the *future-clarity bonus*: it rewards actions that lead somewhere the agent feels sure
-about, and being additive it still provides signal when every rollout in a group scores the
-same and `A_i` collapses to zero.
-
----
-
-## Quick start
-
-```bash
-python -m venv venv && venv/Scripts/activate      # Windows; use bin/activate elsewhere
-pip install -r requirements.txt
-
-ollama serve            # in another terminal
-ollama pull llama3.2
-
-python -m pytest tests/ -v      # 16 tests, no LLM needed
-python inspect_entropy.py       # see the mechanism step by step
-python run_demo.py --seeds 5 --ablation
-```
-
----
-
-## What you actually see
-
-### 1. Entropy really does separate confident steps from ambiguous ones
-
-This is not assumed — it is measured. Mean step entropy by task phase:
-
-| phase | mean H (nats) | what it is |
+| Eq. | Quantity | Function |
 |---|---|---|
-| `final` | **0.11** | the last, obvious move |
-| `take`  | 0.33 | picking up the object you just found |
-| `act`   | 0.85 | clean / heat the object |
-| `search`| 0.90 | *which of 3-4 identical containers?* |
-| `goto`  | 1.07 | which location first? |
+| 7  | `H_t` = mean token entropy of one reason→act response | `LLMPolicy.score` + `trainer.update` |
+| 4  | `A_i = (r_i − mean_group r) / (std_group r + ε)` | `grpo_advantages` |
+| 12 | `H_norm = (H − min_B H) / (max_B H − min_B H + ε)` | `normalize_entropy` |
+| 10 | `g(H_t) = exp(−k·H_norm) / mean_B exp(−k·H_norm)` (batch mean = 1) | `scale_g` |
+| 11 | `f(H_t+1) = exp(−k'·H_norm,t+1)` | `clarity_f` |
+| 8  | `A_mod = A_i · g(H_t) + ζ · f(H_t+1)` | `compute_advantages` |
+| 13 | `A_final = A_mod − mean_B A_mod` | `compute_advantages` |
 
-The genuinely ambiguous steps carry ~10x the entropy of the obvious ones. That spread is the
-raw material EMPG works with; without it, `g(H)` would have nothing to modulate.
-
-### 2. Confident errors get punished harder
-
-From `inspect_entropy.py`, one real step — `drop mug` chosen at the *final* phase with
-H=0.018, i.e. near-total confidence, and wrong:
-
-```
-traj st phase   ok    H_t  Hnorm   g(H)  f(H+1)  A_GRPO  A_EMPG  action
-  5   6 final   n   0.018  0.000  1.709   0.902  -0.606  -1.122  drop mug   <- confident: amplified
-```
-
-GRPO gives it `-0.606`, the same as every other step in that failed episode. EMPG nearly
-doubles the penalty to `-1.122`. Aggregated over a group:
-
-```
-mean A_EMPG, confident + failed = -0.969
-mean A_EMPG, uncertain + failed = -0.452
-```
-
-### 3. When GRPO has no signal at all, EMPG still does
-
-Whenever every rollout in a group shares an outcome — all fail, or all succeed — Eq. 4 gives
-`A_i = 0` for *every step of every trajectory*, and GRPO's update is identically zero. EMPG's
-advantages stay non-zero, because the additive clarity bonus still ranks the steps.
-
-`inspect_entropy.py --task heat_food --group 3 --warmup 0` lands on this case (an untrained
-head rarely finishes a task, so small groups often fail unanimously); the script detects it
-and says so.
-
-### 4. Training: EMPG ends slightly ahead
-
-![learning curve](results/learning_curve.png)
-
-20 seeds, 15 iterations, group size 8, on three sparse-reward tasks. Because seed variance
-dominates, the meaningful comparison is **paired** — same seed, both arms:
-
-| method | final success | vs GRPO (paired) | t | seeds won |
-|---|---|---|---|---|
-| GRPO (baseline) | 92.7% ± 0.8% | — | — | — |
-| EMPG: scaling only (`g`) | 94.4% ± 0.5% | **+1.7%** | +2.07 | 13/20 |
-| EMPG: clarity only (`f`) | 92.1% ± 0.8% | −0.6% | −1.16 | 3/20 |
-| **EMPG (full)** | **94.9% ± 0.6%** | **+2.2%** | **+3.05** | **14/20** |
-
-Full EMPG beats GRPO consistently enough to be believable (t≈3). **The ablation does not match
-the paper**, though: there, the clarity bonus alone was the stronger of the two mechanisms
-(+2.2 vs +0.7 for scaling). Here it is the reverse — `g` carries essentially all of the
-benefit and `f` alone is slightly *negative*. Two plausible reasons: episodes here are 5-10
-steps rather than the paper's much longer horizons, so there is little future to be clear
-about; and `zeta = 0.05` is tuned for their reward scale, not this one.
-
-![entropy analysis](results/entropy_analysis.png)
-
----
-
-## How honest is this?
-
-Deliberately so. Some things to keep in mind before reading anything into the numbers:
-
-- **The gap is small.** +2.2 points paired over 20 seeds (t≈3.05, 14/20 seeds won) is a real
-  effect on this task, but it is a demonstration of a mechanism — **not** a reproduction of the
-  paper's +8.1-point ALFWorld result on a 1.5B model.
-- **The ablation disagrees with the paper** (see above): here the gradient scaling does the
-  work and the clarity bonus alone slightly hurts, which is the opposite of their Table 2.
-- **Single-run numbers are unstable.** A 5-seed run of the same code put clarity-only at +2.8%
-  on one occasion and +0.3% on another. Anything below ~20 seeds here is noise; if you re-run
-  with `--seeds 5` expect the ablation ordering to move around.
-- **Greedy evaluation saturates at 100%** for every arm, so it does not discriminate; the
-  table above reports training success, which does.
-- **EMPG is a training method, and Ollama cannot backpropagate.** So the frozen LLM supplies
-  the *uncertainty*, and a small trainable head supplies the *policy*. The entropies and the
-  gradients are both real; the trained parameter set is just far smaller than the paper's.
-- **The environment is hand-written**, not real ALFWorld, and its ambiguous steps are
-  ambiguous by construction.
-
-## Design notes worth knowing
-
-**Entropy is measured over the choice, not over prose.** The first implementation asked the
-LLM for a free-text action and averaged token entropies. That signal was dominated by phrasing
-noise — the 100%-accurate `take` step scored the *highest* entropy of any phase. Presenting
-the actions as a labelled multiple choice and reading the distribution over the single label
-token fixed it, and entropy started tracking competence as EMPG assumes.
-
-**Ollama exposes logprobs only on the OpenAI-compatible route.** `/api/generate` rejects an
-integer `logprobs` field; use `/v1/chat/completions` with `logprobs: true, top_logprobs: 20`.
-The top 20 carry ~99.6% of the mass here, so renormalising over them is a sound entropy
-estimate — and EMPG only ever uses entropy comparatively anyway (Eq. 12).
-
-**Caching is a correctness feature, not just a speed one.** The LLM is frozen, so its
-distribution over a given state is fixed; the environment has only ~32 reachable states. Every
-arm therefore trains on *identical* entropies, and any difference between arms comes from the
-advantage weighting rather than from resampling noise. A full 5-seed ablation makes **zero**
-LLM calls once the cache is warm.
-
-**The warm start is calibrated on purpose.** Too weak and the agent never finishes a task, so
-every group scores 0 and `A_i = 0`; too strong and every rollout succeeds, so `A_i = 0` again.
-Either extreme silently destroys the comparison. Training starts near 55% here, leaving both
-in-group variance and headroom.
+`g` multiplies the advantage, so it changes the size of the update but keeps its sign. It **amplifies** confident
+correct steps, **penalises confident errors harder**, and **damps** uncertain steps. `f` is additive. It rewards
+actions that lead to a low-entropy next state, so it still ranks steps when every rollout in a group has the same
+outcome and GRPO's `A_i` is zero. The paper leaves one case undefined: a terminal step has no `t+1`. Here it
+gets `f = 0`.
 
 ## Layout
 
 ```
-empg/empg.py     Eq. 4, 8, 10-13 as pure functions - the paper, transcribed
-empg/llm.py      Ollama client; step entropy from token logprobs (Eq. 7)
-empg/env.py      sparse-reward ALFWorld-style text household tasks
-empg/agent.py    LLM scores the options, small torch head picks
-empg/train.py    shared loop; one flag switches GRPO <-> EMPG
-run_demo.py      trains both arms, writes plots + results.json
-inspect_entropy.py   per-step table of H, g, f and both advantages
-tests/           16 unit tests pinning the abstract's claims
+empg/                      the algorithm (benchmark-agnostic)
+  advantages.py            GRPO + EMPG advantage estimators (pure numpy)
+  policy.py                LLM + LoRA: batched generation, logprob / entropy scoring
+  rollout.py               multi-turn episodes, all envs stepped in lockstep
+  loss.py                  token-level PPO-clip + k3 KL to the reference (adapter-off) model
+  trainer.py               rollout → entropy → advantages → update
+  prompts.py               verl-agent ALFWorld prompt, <think>/<action> parsing
+  config.py                dataclass config, YAML `inherit:`, dotted CLI overrides
+  envs/base.py             Env / Benchmark protocols (add WebShop, Deep Search here)
+  envs/alfworld_env.py     real ALFWorld (TextWorld), one env per game file
+benchmarks/
+  configs/                 base.yaml + one small file per arm (arms differ only in `advantage:`)
+  train.py  evaluate.py    train one arm / evaluate per ALFWorld subtask
+  suite.py  report.py      all arms × seeds → paper-style tables + curves in results/
+tests/                     equation invariants, prompt parsing, CPU end-to-end update
 ```
+
+Extension points:
+- **New advantage estimator** (such as DAPO or GiGPO): add a branch in `compute_advantages`. For DAPO's
+  clip-higher, set `train.clip_high`.
+- **New benchmark**: add a module implementing `Benchmark`/`Env` in `empg/envs/` and register it in
+  `make_benchmark`.
+- **Bigger model**: set `policy.model_name`.
+
+## Setup (WSL, NVIDIA GPU)
+
+ALFWorld's TextWorld backend is Linux-only, so everything runs in WSL:
+
+```bash
+wsl
+cd "/mnt/c/.../Harnessing_Uncertainty"
+bash scripts/setup_wsl.sh              # venv in ~/venvs/empg, CUDA 12.8 torch, deps, alfworld-download
+source ~/venvs/empg/bin/activate
+```
+
+## Running
+
+```bash
+pytest tests/                                                         # math + CPU end-to-end
+python -m benchmarks.train --config benchmarks/configs/smoke.yaml     # few-minute end-to-end on ALFWorld
+python -m benchmarks.train --config benchmarks/configs/alfworld_empg.yaml --seed 0
+python -m benchmarks.evaluate --config benchmarks/configs/alfworld_empg.yaml --seed 0
+python -m benchmarks.suite --seeds 0 1 2                              # base + GRPO + EMPG + ablations
+python -m benchmarks.report                                           # → results/
+```
+
+Any config value can be overridden from the command line, for example `train.iterations=50`,
+`advantage.zeta=0.1` or `eval.max_tasks=40`.
+
+## Benchmark suite
+
+The suite follows the paper's ALFWorld protocol:
+- **Metric:** success rate on the 6 subtasks (Pick, Look, Clean, Heat, Cool, Pick2) and overall, measured on
+  `valid_unseen` (out of distribution).
+- **Arms:** zero-shot base model, GRPO, GRPO + EMPG, and the two ablations (gradient scaling `g` only, clarity
+  bonus `f` only).
+- **Controlled comparison:** all arms share `base.yaml`, the same seeds and the same task sampling. They differ
+  only in the `advantage:` block.
+
+Paper hyperparameters used unchanged: `k = k' = 1`, `ζ = 0.05`, KL coefficient 0.01, group-normalised outcome
+reward (10 × success), and a 0.1 invalid-action penalty, as in verl-agent.
+
+### Differences from the paper (hardware: one 8GB laptop GPU)
+
+| | Paper | Here |
+|---|---|---|
+| Model | Qwen2.5-1.5B/7B-Instruct, full fine-tuning | Qwen2.5-0.5B-Instruct, LoRA r=16 |
+| LR | 1e-6 | 1e-5 (LoRA) |
+| Batch | 16 tasks × group 8 | 4 tasks × group 8 |
+| Steps | 150, 50-turn episodes | 100 iterations, 30-turn training episodes (50 at eval) |
+| Framework | verl-agent (vLLM rollouts) | HF `generate` |
+
+## Results
+
+_Pending: produced by `benchmarks.suite` + `benchmarks.report`._
