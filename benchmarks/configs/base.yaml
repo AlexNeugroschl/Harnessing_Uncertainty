@@ -7,6 +7,7 @@ benchmark: alfworld
 env:
   history_length: 2
   memory: false          # true: prompt lists visited locations (curiosity plan H6 control)
+  workers: 4             # independent ALFWorld processes; 0 for serial reference path
 policy:
   model_name: Qwen/Qwen2.5-1.5B-Instruct
   lora_r: 16
@@ -15,6 +16,10 @@ policy:
   temperature: 1.0
   gen_batch_size: 32
   micro_batch_size: 2
+  chunked_head: true     # exact response-only scores; bounded vocabulary activation memory
+  head_chunk_size: 128
+  backend: hf            # hf | vllm (separate venv, see README "Speed"); same for all compared arms
+  merge_lora: true       # hf: merged-LoRA decoding, base weights restored exactly afterwards
 advantage:
   k: 1.0
   k_prime: 1.0

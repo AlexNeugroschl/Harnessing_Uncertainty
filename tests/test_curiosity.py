@@ -87,6 +87,9 @@ def test_zero_curiosity_is_identical(method):
     a = compute_advantages(REWARDS, GROUPS, STEP_TRAJ, ENT, cfg)
     b = compute_advantages(REWARDS, GROUPS, STEP_TRAJ, ENT, cfg, intrinsic=None)
     np.testing.assert_array_equal(a, b)
+    weighted_zero = intrinsic_rewards(SEQS, GROUPS, WON, cfg.curiosity)
+    c = compute_advantages(REWARDS, GROUPS, STEP_TRAJ, ENT, cfg, intrinsic=weighted_zero)
+    np.testing.assert_array_equal(a, c)
 
 
 def test_step_mode_adds_centred_bonus():

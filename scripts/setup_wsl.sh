@@ -14,8 +14,14 @@ fi
 source "$VENV/bin/activate"
 python -m pip install --upgrade pip wheel
 
-# RTX 50xx (Blackwell, sm_120) needs CUDA >= 12.8 builds of torch.
-pip install torch --index-url https://download.pytorch.org/whl/cu128
+if [ "${EMPG_VLLM:-0}" = "1" ]; then
+  # vLLM pins its own torch build, so it gets its own venv, e.g.
+  #   EMPG_VLLM=1 EMPG_VENV=~/venvs/empg-vllm bash scripts/setup_wsl.sh
+  pip install vllm
+else
+  # RTX 50xx (Blackwell, sm_120) needs CUDA >= 12.8 builds of torch.
+  pip install torch --index-url https://download.pytorch.org/whl/cu128
+fi
 pip install -r requirements.txt
 
 # ALFWorld game files + PDDL (to ~/.cache/alfworld by default).

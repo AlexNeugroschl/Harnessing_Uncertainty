@@ -1,0 +1,14 @@
+# Mechanism screen: fewer sibling episodes, with the long episode horizon retained.
+# A null result here is inconclusive; confirm a fixed candidate at reduced/full scale.
+out_dir: runs/pilot
+train:
+  iterations: 8
+  games_per_iter: 2
+  group_size: 4
+  max_steps: 30
+  save_every: 0
+eval:
+  split: valid_seen       # development only; preserve valid_unseen for confirmation
+  max_tasks: 24
+  max_steps: 50
+  selection: stratified

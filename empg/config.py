@@ -7,6 +7,8 @@ Overrides look like ``advantage.zeta=0.1`` or ``train.iterations=20``.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -33,6 +35,8 @@ class TrainConfig:
     mini_batches: int = 4        # optimizer steps per epoch
     max_grad_norm: float = 1.0
     save_every: int = 25
+    max_env_steps: int = 0       # stop at a batch boundary; 0 = iterations only
+    max_seconds: float = 0.0     # rollout+update budget; may overshoot by one batch
 
 
 @dataclass
@@ -42,6 +46,8 @@ class EvalConfig:
     max_steps: int = 50
     greedy: bool = True
     batch_envs: int = 32
+    selection: str = "random"   # random | stratified (proportional task-type allocation)
+    selection_seed: int = 0     # independent of training seed, shared by all arms
 
 
 @dataclass
@@ -59,6 +65,10 @@ class Config:
     @property
     def run_dir(self) -> Path:
         return Path(self.out_dir) / f"{self.name}_s{self.seed}"
+
+
+def config_fingerprint(cfg: Config) -> str:
+    return hashlib.sha256(json.dumps(dataclasses.asdict(cfg), sort_keys=True).encode()).hexdigest()
 
 
 def _read_yaml(path: Path) -> dict:

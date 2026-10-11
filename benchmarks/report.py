@@ -6,6 +6,7 @@ Writes:
     results/table_alfworld.md   per-subtask success (paper Table 1 layout)
     results/ablation.md         GRPO vs g-only vs f-only vs full EMPG (paper ablation)
     results/exploration.md      exploration metrics from training (curiosity plan Sec. 6)
+    results/response_lengths.md response lengths vs the max_new_tokens cap (is a lower cap safe?)
     results/training_curves.png train success, step entropy, revisit rate, P(group has a success)
     results/summary.json        all numbers above
 """
@@ -18,6 +19,9 @@ from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
+
+from empg.rollout import length_stats
+from benchmarks.statistics import paired_comparison
 
 SUBTASKS = ["Pick", "Look", "Clean", "Heat", "Cool", "Pick2"]
 ARMS = [("grpo", "GRPO"), ("empg", "GRPO + EMPG"),
@@ -78,7 +82,7 @@ def table(evals, rows, cols) -> str:
         if not rs:
             continue
         cells = [cell([r[c] for r in rs if c in r]) for c in cols]
-        body += f"| {label} | " + " | ".join(cells) + f" | {cell([r['all'] for r in rs])} | {len(rs)} |\n"
+        body += "| " + " | ".join([label, *cells, cell([r['all'] for r in rs]), str(len(rs))]) + " |\n"
     return head + body
 
 
@@ -90,7 +94,7 @@ def smooth(x, w=5):
     return np.concatenate([np.full(w - 1, np.nan), c])
 
 
-def plot(curves, out: Path):
+def plot(curves, out: Path, x_key="iteration"):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -107,20 +111,27 @@ def plot(curves, out: Path):
     colors = {a: COLORS.get(a) or next(spare, "#52514e") for a, _ in arms}
     for ax, (key, title) in zip(axes, panels):
         for arm, label in arms:
-            runs = [r for r in curves[arm] if r and key in r[0]]
+            runs = [r for r in curves[arm] if r and key in r[0]
+                    and all(x_key in m for m in r)]
             if not runs:
                 continue
-            n = min(len(r) for r in runs)
-            y = np.array([[m[key] for m in r[:n]] for r in runs])
+            lo = max(r[0][x_key] for r in runs)
+            hi = min(r[-1][x_key] for r in runs)
+            if lo > hi:
+                continue
+            it = np.linspace(lo, hi, min(len(r) for r in runs))
+            y = np.array([np.interp(it, [m[x_key] for m in r],
+                                    [m[key] for m in r]) for r in runs])
             mean = smooth(y.mean(0)) if key in smoothed else y.mean(0)
-            it = np.arange(1, n + 1)
             ax.plot(it, mean, color=colors[arm], lw=2, label=f"{label} (n={len(runs)})")
             if len(runs) > 1:
                 sd = y.std(0) / np.sqrt(len(runs))
                 sd = smooth(sd) if key in smoothed else sd
                 ax.fill_between(it, mean - sd, mean + sd, color=colors[arm], alpha=0.12, lw=0)
         ax.set_title(title, fontsize=10, loc="left", color="#0b0b0b")
-        ax.set_xlabel("iteration", color="#52514e")
+        ax.set_xlabel({"iteration": "iteration", "env_steps_total": "environment steps",
+                       "response_tokens_total": "generated response tokens",
+                       "seconds_total": "training seconds"}[x_key], color="#52514e")
         ax.grid(True, color="#e6e5e0", lw=0.8)
         for s in ("top", "right"):
             ax.spines[s].set_visible(False)
@@ -137,6 +148,32 @@ def plot(curves, out: Path):
     plt.close(fig)
 
 
+def comparisons(evals, baseline="grpo"):
+    head = ("### Paired evaluation differences\n\n"
+            "Intervals resample paired tasks and seeds; one seed measures task variability only. "
+            "Few seeds give uncertain intervals. Degenerate intervals cannot establish equivalence. "
+            "Screening and selected variants need fresh confirmation.\n\n"
+            "| Candidate vs baseline | delta (pp) | 95% interval (pp) | seeds | tasks |\n"
+            "|---|---:|---|---:|---:|\n")
+    summary = {}
+    if baseline not in evals:
+        return head + f"\nNo {baseline} evaluations available.\n", summary
+    for arm in sorted(evals):
+        if arm in ("base", baseline):
+            continue
+        try:
+            row = paired_comparison(evals[baseline], evals[arm])
+            summary[arm] = row
+            lo, hi = row["ci95"]
+            qualifier = " (degenerate)" if row["degenerate"] else ""
+            head += (f"| {arm} vs {baseline} | {100 * row['delta']:+.1f} | "
+                     f"[{100 * lo:+.1f}, {100 * hi:+.1f}]{qualifier} | {len(row['seeds'])} | {row['n_tasks']} |\n")
+        except ValueError as exc:
+            summary[arm] = {"unavailable": str(exc)}
+            head += f"| {arm} vs {baseline} | unavailable: {exc} | | | |\n"
+    return head, summary
+
+
 def explore_table(curves, last: int = 5) -> str:
     """Mean of each exploration metric over the last ``last`` iterations, averaged over seeds."""
     names = ["Method", *(label for _, label in EXPLORE_COLS)]
@@ -147,10 +184,59 @@ def explore_table(curves, last: int = 5) -> str:
             continue
         cells = []
         for key, _ in EXPLORE_COLS:
-            vals = [np.nanmean([m.get(key, np.nan) for m in r[-last:]]) for r in runs]
-            vals = [v for v in vals if np.isfinite(v)]
+            vals = []
+            for r in runs:
+                values = np.array([m.get(key, np.nan) for m in r[-last:]])
+                finite = values[np.isfinite(values)]
+                if len(finite):
+                    vals.append(finite.mean())
             cells.append(f"{np.mean(vals):.2f}" if vals else "–")
         out += f"| {label} | " + " | ".join(cells) + " |\n"
+    return out
+
+
+def load_lengths(runs: Path, split: str) -> dict:
+    """{arm: {phase: raw lengths}} from the resp_lengths_* files, pooled over seeds."""
+    pooled = defaultdict(lambda: defaultdict(
+        lambda: {"len": [], "truncated": [], "valid": [], "cap": set()}))
+
+    def add(arm, phase, rec):
+        d = pooled[arm][phase]
+        for k in ("len", "truncated", "valid"):
+            d[k] += rec[k]
+        d["cap"].add(rec["cap"])
+
+    for d in sorted(runs.iterdir()):
+        if not d.is_dir():
+            continue
+        arm = "base" if d.name == "base" else d.name.rsplit("_s", 1)[0]
+        t = d / "resp_lengths_train.jsonl"
+        if t.exists():
+            recs = [json.loads(line) for line in t.open()]
+            for rec in recs:
+                add(arm, "train", rec)
+            for rec in recs[-5:]:
+                add(arm, "train, last 5 it", rec)
+        e = d / f"resp_lengths_eval_{split}.json"
+        if e.exists():
+            add(arm, "eval", json.loads(e.read_text()))
+    return pooled
+
+
+def lengths_table(pooled: dict) -> str:
+    names = ["Method", "phase", "responses", "mean", "p50", "p90", "p99", "p99.9", "max", "cap",
+             "% truncated", "% of truncated invalid"]
+    out = "| " + " | ".join(names) + " |\n" + "|---" * len(names) + "|\n"
+    rows = with_extra_arms([("base", "Qwen2.5-1.5B-Instruct (zero-shot)"), *ARMS], pooled)
+    for arm, label in rows:
+        for phase, raw in pooled.get(arm, {}).items():
+            st = length_stats(raw)
+            if not st:
+                continue
+            cap = "/".join(str(c) for c in sorted(raw["cap"]))
+            out += (f"| {label} | {phase} | {st['n']} | {st['mean']:.0f} | {st['p50']:.0f} "
+                    f"| {st['p90']:.0f} | {st['p99']:.0f} | {st['p99.9']:.0f} | {st['max']} "
+                    f"| {cap} | {100 * st['trunc_rate']:.2f} | {100 * st['trunc_invalid']:.0f} |\n")
     return out
 
 
@@ -160,6 +246,7 @@ def main():
     ap.add_argument("--split", default="valid_unseen")
     ap.add_argument("--out", default="results")
     ap.add_argument("--arms", nargs="+", help="only these runs (plus base), e.g. to keep plots ≤8 series")
+    ap.add_argument("--baseline", default="grpo", help="baseline for paired task/seed comparisons")
     args = ap.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -176,10 +263,21 @@ def main():
     (out / "ablation.md").write_text(t2)
     t3 = "### Exploration during training (mean of last 5 iterations)\n\n" + explore_table(curves)
     (out / "exploration.md").write_text(t3)
+    t4 = ("### Response lengths (tokens) vs the `max_new_tokens` cap\n\n"
+          "A cap is free only if (almost) no response reaches it. While `% truncated` is near 0, "
+          "p99 and p99.9 show where a lower cap would start cutting responses off.\n\n"
+          + lengths_table(load_lengths(Path(args.runs), args.split)))
+    (out / "response_lengths.md").write_text(t4)
     (out / "summary.json").write_text(json.dumps(evals, indent=2))
+    paired_md, paired = comparisons(evals, args.baseline)
+    (out / "paired_comparisons.md").write_text(paired_md)
+    (out / "paired_comparisons.json").write_text(json.dumps(paired, indent=2))
     if curves:
         plot(curves, out / "training_curves.png")
-    print(t1 + "\n" + t2 + "\n" + t3)
+        for x in ("env_steps_total", "response_tokens_total", "seconds_total"):
+            if any(r and x in r[0] for runs in curves.values() for r in runs):
+                plot(curves, out / f"training_curves_{x}.png", x_key=x)
+    print(t1 + "\n" + t2 + "\n" + t3 + "\n" + t4)
 
 
 if __name__ == "__main__":

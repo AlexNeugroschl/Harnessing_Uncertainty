@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+from contextlib import ExitStack
 import json
 import random
 import time
@@ -11,12 +12,12 @@ import numpy as np
 import torch
 
 from empg.advantages import compute_advantages, normalize_entropy
-from empg.config import Config
+from empg.config import Config, config_fingerprint
 from empg.curiosity import exploration_stats, intrinsic_rewards
 from empg.envs.base import make_benchmark
 from empg.loss import policy_loss
 from empg.policy import LLMPolicy
-from empg.rollout import Trajectory, run_episodes
+from empg.rollout import Trajectory, length_stats, response_lengths, run_episodes
 
 
 def seed_everything(seed: int):
@@ -42,18 +43,27 @@ def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
            rng: np.random.Generator, iteration: int = 1) -> dict:
     """One policy-gradient update on a batch of trajectories. Returns stats."""
     tc = cfg.train
+    if policy.cfg.temperature != 1.0 or policy.cfg.top_p != 1.0:
+        raise ValueError("on-policy training requires temperature=1 and top_p=1; "
+                         "scoring does not include sampling transforms")
     steps = [s for tr in trajs for s in tr.steps]
+    if not steps:
+        raise ValueError("cannot update from an empty rollout")
+    if tc.kl_coef > 0 and not policy.use_lora:
+        raise ValueError("KL reference currently requires LoRA; use kl_coef=0 for full fine-tuning")
     step_traj = np.array([i for i, tr in enumerate(trajs) for _ in tr.steps])
     P = [s.prompt_ids for s in steps]
     R = [s.response_ids for s in steps]
 
     # Step entropy H_t (Eq. 7): mean full-vocab token entropy over the response.
+    t_score = time.perf_counter()
     old_logp, ents = policy.score(P, R, with_entropy=True)
     for s, e in zip(steps, ents):
         s.entropy = e.mean().item()
     ref_logp = None
     if tc.kl_coef > 0 and policy.use_lora:  # reference = base model (adapter off)
         ref_logp, _ = policy.score(P, R, with_entropy=False, reference=True)
+    score_seconds = time.perf_counter() - t_score
 
     groups = [tr.group for tr in trajs]
     won = [tr.won for tr in trajs]
@@ -67,7 +77,12 @@ def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
     adv = compute_advantages([tr.reward for tr in trajs], groups, step_traj, step_h,
                              cfg.advantage, intrinsic=intrinsic)
 
+    # Keep transformer gradient checkpointing active; disable LoRA/module
+    # dropout so PPO uses the conditional distribution used in rollout.
     policy.model.train()
+    for module in policy.model.modules():
+        if isinstance(module, torch.nn.Dropout):
+            module.eval()
     dev, mb_size = policy.device, policy.cfg.micro_batch_size
     sums = {"pg": 0.0, "kl": 0.0, "clipfrac": 0.0, "tokens": 0}
     grad_norms = []
@@ -76,6 +91,9 @@ def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
             if len(mb) == 0:
                 continue
             n_tok = sum(len(R[i]) for i in mb)
+            # Keep random minibatch membership and token-mean weighting, while
+            # reducing padding inside its gradient-accumulation microbatches.
+            mb = np.array(sorted(mb, key=lambda i: len(P[i]) + len(R[i])))
             opt.zero_grad(set_to_none=True)
             for s in range(0, len(mb), mb_size):
                 idx = mb[s:s + mb_size]
@@ -85,7 +103,7 @@ def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
                 ref = _right_aligned([ref_logp[i] for i in idx], T, dev) if ref_logp else None
                 a = torch.tensor(adv[idx], dtype=torch.float32, device=dev)[:, None].expand(-1, T)
                 loss, st = policy_loss(logp, old, ref, a, mask, tc.clip_low, tc.clip_high,
-                                       tc.kl_coef)
+                                       tc.kl_coef, tensor_stats=True)
                 (loss / n_tok).backward()
                 for k in ("pg", "kl", "clipfrac"):
                     sums[k] += st[k]
@@ -101,38 +119,80 @@ def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
 
     H = np.array(step_h)
     rewards = np.array([tr.reward for tr in trajs])
+    lens = length_stats(response_lengths(trajs))
     groups = np.array(groups)
     flat = np.mean([np.ptp(rewards[groups == g]) == 0 for g in np.unique(groups)])
     n = max(sums["tokens"], 1)
     explore = exploration_stats([tr.key_seq(METRICS_KEY) for tr in trajs], groups, won)
-    share = (float(np.abs(intrinsic).mean() / max(np.abs(adv).mean(), 1e-8))
-             if intrinsic is not None else 0.0)
+    # Measure the actual contribution after centering/trajectory normalization.
+    # Raw positive bonuses can exaggerate influence when most are constant.
+    base_adv = compute_advantages([tr.reward for tr in trajs], groups, step_traj, step_h,
+                                 cfg.advantage)
+    effective_intrinsic = adv - base_adv
+    share = float(np.abs(effective_intrinsic).mean() / max(np.abs(adv).mean(), 1e-8))
     return {
+        "t_score": score_seconds,
         **explore,
-        "intrinsic_share": share,  # mean |curiosity term| / mean |final advantage|
+        "intrinsic_share": share,  # mean |A_with_curiosity - A_without| / mean |A_with|
         "success": float(np.mean([tr.won for tr in trajs])),
         "reward": float(rewards.mean()),
         "ep_len": float(np.mean([len(tr.steps) for tr in trajs])),
         "invalid_rate": float(np.mean([not s.valid for s in steps])),
+        "resp_len_mean": lens["mean"], "resp_len_p99": lens["p99"], "resp_len_max": lens["max"],
+        "trunc_rate": lens["trunc_rate"],  # share of responses cut off at max_new_tokens
         "entropy_mean": float(H.mean()), "entropy_std": float(H.std()),
         "adv_std": float(adv.std()),
         "flat_group_frac": float(flat),  # groups where GRPO's Eq. 4 is all zero
-        "pg_loss": sums["pg"] / n, "kl": sums["kl"] / n, "clipfrac": sums["clipfrac"] / n,
+        "pg_loss": float(sums["pg"] / n), "kl": float(sums["kl"] / n),
+        "clipfrac": float(sums["clipfrac"] / n),
         "grad_norm": float(np.mean(grad_norms)) if grad_norms else 0.0,
         "n_steps": len(steps),
     }
 
 
+def gpu_memory_check(log=print, _warned=[False]) -> dict:
+    """Peak VRAM this process reserved since the last call. With the Windows/WSL
+    "CUDA Sysmem Fallback Policy" on, going past physical VRAM does not raise OOM:
+    it silently spills into shared system RAM and runs several times slower."""
+    if not torch.cuda.is_available():
+        return {}
+    peak = torch.cuda.max_memory_reserved()
+    total = torch.cuda.mem_get_info()[1]
+    torch.cuda.reset_peak_memory_stats()
+    if peak > 0.98 * total and not _warned[0]:
+        _warned[0] = True
+        log(f"WARNING: peak reserved VRAM {peak / 2**30:.2f} GiB >= physical {total / 2**30:.2f} "
+            "GiB, so the run is probably spilling into shared system memory (very slow). Set "
+            "NVIDIA Control Panel > Manage 3D settings > CUDA - Sysmem Fallback Policy to "
+            "'Prefer No Sysmem Fallback' (see README).")
+    return {"gpu_peak_gb": peak / 2**30}
+
+
 def train(cfg: Config, log=print) -> LLMPolicy:
+    tc = cfg.train
+    if min(tc.iterations, tc.games_per_iter, tc.max_steps, tc.mini_batches, tc.ppo_epochs) < 1:
+        raise ValueError("training counts/horizon must be positive")
+    if tc.group_size < 2:
+        raise ValueError("GRPO comparisons require group_size >= 2")
+    if tc.max_env_steps < 0 or tc.max_seconds < 0:
+        raise ValueError("training budgets must be nonnegative")
+    if cfg.policy.temperature != 1.0 or cfg.policy.top_p != 1.0:
+        raise ValueError("on-policy training requires temperature=1 and top_p=1")
     seed_everything(cfg.seed)
-    rng = np.random.default_rng(cfg.seed)
+    task_rng = np.random.default_rng(cfg.seed)
+    rng = np.random.default_rng(np.random.SeedSequence([cfg.seed, 1]))
     run_dir = cfg.run_dir
+    saved_config = run_dir / "config.json"
+    if saved_config.exists() and json.loads(saved_config.read_text()) != dataclasses.asdict(cfg):
+        raise ValueError(f"{run_dir} contains a different configuration; choose a new name= or out_dir=")
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "config.json").write_text(json.dumps(dataclasses.asdict(cfg), indent=2))
 
     bench = make_benchmark(cfg.benchmark, **cfg.env)
     train_tasks = bench.tasks("train")
-    policy = LLMPolicy(cfg.policy)
+    if tc.games_per_iter > len(train_tasks):
+        raise ValueError("games_per_iter exceeds the available training tasks")
+    policy = LLMPolicy(cfg.policy, seed=cfg.seed)
     opt = torch.optim.AdamW(policy.parameters(), lr=cfg.train.lr,
                             weight_decay=cfg.train.weight_decay)
     tc = cfg.train
@@ -143,25 +203,52 @@ def train(cfg: Config, log=print) -> LLMPolicy:
         + (f" ({cur.key}/{cur.scope}/{cur.bonus}/{cur.mode}, schedule={cur.schedule}, "
            f"gate={cur.gate})" if cur.weight else ""))
 
-    with open(run_dir / "metrics.jsonl", "w") as mf:
+    gpu_memory_check(log)  # reset the peak counter
+    cumulative_steps, cumulative_tokens, cumulative_seconds = 0, 0, 0.0
+    stop_reason = "iterations"
+    with ExitStack() as cleanup, open(run_dir / "metrics.jsonl", "w") as mf, \
+            open(run_dir / "resp_lengths_train.jsonl", "w") as lf:
+        if hasattr(bench, "close"):
+            cleanup.callback(bench.close)
         for it in range(1, tc.iterations + 1):
             t0 = time.time()
-            chosen = rng.choice(len(train_tasks), tc.games_per_iter, replace=False)
+            chosen = task_rng.choice(len(train_tasks), tc.games_per_iter, replace=False)
             tasks = [train_tasks[c] for c in chosen for _ in range(tc.group_size)]
             groups = [g for g in range(tc.games_per_iter) for _ in range(tc.group_size)]
+            rollout_times = {}
             trajs = run_episodes(policy, bench, tasks, groups, tc.max_steps,
-                                 tc.success_reward, tc.invalid_penalty)
+                                 tc.success_reward, tc.invalid_penalty, timings=rollout_times)
             t1 = time.time()
             stats = update(policy, opt, trajs, cfg, rng, iteration=it)
-            stats.update(iteration=it, t_rollout=t1 - t0, t_update=time.time() - t1)
+            stats.update(iteration=it, t_rollout=t1 - t0, t_update=time.time() - t1,
+                         **rollout_times, **gpu_memory_check(log))
+            cumulative_steps += sum(len(tr.steps) for tr in trajs)
+            cumulative_tokens += sum(len(s.response_ids) for tr in trajs for s in tr.steps)
+            cumulative_seconds += stats["t_rollout"] + stats["t_update"]
+            stats.update(env_steps_total=cumulative_steps, response_tokens_total=cumulative_tokens,
+                         seconds_total=cumulative_seconds, tasks=[train_tasks[c] for c in chosen])
             mf.write(json.dumps(stats) + "\n")
             mf.flush()
+            lf.write(json.dumps({"iteration": it, "cap": cfg.policy.max_new_tokens,
+                                 **response_lengths(trajs)}) + "\n")
+            lf.flush()
             log(f"it {it:4d} | succ {stats['success']:.2f} | R {stats['reward']:+.2f} "
                 f"| len {stats['ep_len']:.1f} | inval {stats['invalid_rate']:.2f} "
                 f"| H {stats['entropy_mean']:.3f} | kl {stats['kl']:.4f} "
                 f"| revisit {stats['revisit_rate']:.2f} | anysucc {stats['any_success_frac']:.2f} "
+                f"| resp p99 {stats['resp_len_p99']:.0f} trunc {stats['trunc_rate']:.2f} "
                 f"| {stats['t_rollout']:.0f}s+{stats['t_update']:.0f}s")
             if tc.save_every and it % tc.save_every == 0:
                 policy.save(str(run_dir / "adapter"))
+            if tc.max_env_steps and cumulative_steps >= tc.max_env_steps:
+                stop_reason = "max_env_steps"
+                break
+            if tc.max_seconds and cumulative_seconds >= tc.max_seconds:
+                stop_reason = "max_seconds"
+                break
     policy.save(str(run_dir / "adapter"))
+    (run_dir / "training_complete.json").write_text(json.dumps({
+        "config_fingerprint": config_fingerprint(cfg), "reason": stop_reason,
+        "iterations": it, "env_steps": cumulative_steps, "response_tokens": cumulative_tokens,
+        "seconds": cumulative_seconds}, indent=2))
     return policy

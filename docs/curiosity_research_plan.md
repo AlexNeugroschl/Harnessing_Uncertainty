@@ -1,5 +1,9 @@
 # Research plan: curiosity for long-horizon, sparse-reward LLM agents
 
+The October 11, 2026 [research audit](research_audit.md) narrows the theoretical claims, repairs the task-sampling
+control, and adds paired evaluation plus a cheaper staged protocol. Use `pilot` on `valid_seen` for development;
+reserve `valid_unseen` for a prespecified confirmation. Earlier timing estimates below predate the optimizations.
+
 **Question.** Can an intrinsic "curiosity" signal help an LLM agent solve long-horizon tasks with sparse reward? The
 signal rewards the agent for reaching states it hasn't tried before, and has to be balanced so that exploration
 doesn't crowd out exploitation.
@@ -64,9 +68,10 @@ So "curiosity vs clarity" is a real design axis, not a detail. It raises three q
 
 That comparison is a contribution in itself, and it's cheap to run because both live in `compute_advantages`.
 
-**A known failure mode curiosity targets.** GRPO learns nothing from a group where all 8 rollouts fail (Eq. 4
-gives `A_i = 0`). The trainer already logs this as `flat_group_frac`. On hard, long tasks early in training, most
-groups are flat. Curiosity can do two things here:
+**A known failure mode curiosity targets.** GRPO has no outcome contrast when every sibling fails. Its advantage
+is zero only when the complete rewards also tie: this implementation penalizes invalid formats, so an all-failed
+group can still learn formatting. `no_signal_frac` tracks binary outcome ties and `flat_group_frac` tracks actual
+reward ties. Curiosity can do two things here:
 - give those groups a learning signal
 - more importantly, make it more likely that *at least one* rollout in the group succeeds, which turns a flat
   group into an informative one
@@ -97,14 +102,14 @@ Novelty is only as good as the state key. ALFWorld offers a ladder from privileg
 
 | Key | Built from | Notes |
 |---|---|---|
-| **Physical state (oracle)** | TextWorld `facts=True`, dropping `checked(...)` and `not_atlocation(...)` | Exact. It captures location, inventory, and which objects are opened, clean, hot or cold. The history predicates have to be dropped, otherwise even a `look` or a revisit counts as a new state (verified in this repo). It uses privileged information, so treat it as the **upper bound**. |
+| **Physical state (oracle)** | TextWorld `facts=True`, dropping `checked(...)` and all `not_*` predicates | Privileged diagnostic for location, inventory and object conditions. It can merge distinct receptacles at one physical location, so it is not a guaranteed upper bound on parsed-key performance. |
 | **Knowledge state (oracle)** | physical state + the set of `checked(loc)` facts | Counts *discovering* a location as progress. This fits ALFWorld well, where most of the work is finding the object. |
-| **Parsed symbolic state** | location, inventory and opened receptacles, parsed from the action history (`go to X`, `take X from Y`, `open X`) | No privileged access, and nearly exact because ALFWorld is deterministic. **The realistic default.** |
+| **Parsed symbolic state** | location, inventory, placements, conditions and opened receptacles tracked from actions/feedback | No privileged access, but a lossy, hand-engineered state abstraction; random-walk checks are limited validation. **The default.** |
 | **Observation hash** | normalised observation text | Simplest option. It breaks when the same state is described differently (a noisy TV in miniature) and when different states produce the same text ("Nothing happens."). |
 | **Embedding novelty** | a sentence embedding of the observation (e.g. `all-MiniLM-L6-v2`, already in the HF cache), compared with kNN distance to episodic memory, or with RND prediction error | Generalises *across games*. Needed for lifelong novelty (see 3.2). |
 | **LLM surprisal** | `−mean log p_ref(o_t+1 ∣ context, a_t)` scored by the frozen reference model (adapter off) | "LLM-native" curiosity with no state engineering: the agent's own language model acts as its world model. It costs one extra scoring pass. Its risk is that it rewards unusual *wording*, not new states. |
 
-Plan: start with **parsed symbolic** (realistic) and **physical oracle** (upper bound). Add embedding novelty and
+Plan: start with **parsed symbolic** and **physical oracle** (privileged diagnostic). Add embedding novelty and
 LLM surprisal as the more novel, research-y options once the pipeline works.
 
 ### 3.2 Novelty over which scope?
@@ -112,7 +117,7 @@ LLM surprisal as the more novel, research-y options once the pipeline works.
 | Scope | Count `n(s)` over | Formula idea | Comment |
 |---|---|---|---|
 | **Episodic** | this episode | `c_t = 1[first visit]` or `1/√n_ep(s_t+1)` | Directly targets loops (H1). Cheap. |
-| **Group** | the 8 sibling rollouts of the same game | `c_t = 1/√n_grp(s_t+1)`, where `n_grp` counts the siblings that reached `s` | Rewards diversity *within the group*, which is what GRPO compares (H3). As far as I know this angle is new for LLM-agent RL. |
+| **Group** | the sibling rollouts of the same game | `c_t = 1/√n_grp(s_t+1)`, where `n_grp` counts the siblings that reached `s` | Rewards within-group state coverage (H3). Novelty and GRPO already appear together in prior work; distinguish this state-based variant and its interaction with clarity rather than claiming the broad idea is new. |
 | **Lifelong** | all of training | pseudo-counts / RND | **Caution:** with 3,553 training games and 2 per iteration, each game is seen about once. Per-game lifelong counts are therefore useless here. Lifelong novelty has to generalise *across* games, so it needs embeddings or an abstract key such as (receptacle type, held object type). |
 | **Combined** (NGU-style) | episodic × lifelong multiplier | `c_t = c_ep · clip(m_life, 1, L)` | Standard in deep RL. Try it only if both parts help on their own. |
 

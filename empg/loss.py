@@ -6,7 +6,7 @@ import torch
 
 
 def policy_loss(logp, old_logp, ref_logp, adv, mask, clip_low=0.2, clip_high=0.2,
-                kl_coef=0.01):
+                kl_coef=0.01, tensor_stats=False):
     """Per-token PPO-clip surrogate + k3 KL (verl's ``low_var_kl``).
 
     All tensors are [B, T]. ``adv`` holds each step's advantage broadcast to all
@@ -24,6 +24,8 @@ def policy_loss(logp, old_logp, ref_logp, adv, mask, clip_low=0.2, clip_high=0.2
         per_tok = pg + kl_coef * kl
     m = mask.float()
     clipped = ((ratio < 1 - clip_low) | (ratio > 1 + clip_high)).float()
-    stats = {"pg": (pg * m).sum().item(), "kl": (kl * m).sum().item(),
-             "clipfrac": (clipped * m).sum().item()}
+    stats = {"pg": (pg * m).sum().detach(), "kl": (kl * m).sum().detach(),
+             "clipfrac": (clipped * m).sum().detach()}
+    if not tensor_stats:
+        stats = {key: value.item() for key, value in stats.items()}
     return (per_tok * m).sum(), stats

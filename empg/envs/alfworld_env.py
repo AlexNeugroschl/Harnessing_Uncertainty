@@ -145,11 +145,13 @@ class ALFWorldEnv:
 
         infos = textworld.EnvInfos(won=True, admissible_commands=True, facts=True,
                                    extras=["gamefile"])
-        env_id = textworld.gym.register_games(
+        # Instantiate directly: register_games would grow the global gym registry
+        # by one entry for every episode in a long training run.
+        from textworld.gym.envs.textworld_batch import TextworldBatchGymEnv
+        self.env = TextworldBatchGymEnv(
             [game_file], infos, batch_size=1, asynchronous=False,
             max_episode_steps=max_episode_steps,
             wrappers=[AlfredDemangler(shuffle=False), AlfredInfos])
-        self.env = textworld.gym.make(env_id)
         self.task = ""
         self.parsed = ParsedState()
 
@@ -188,10 +190,27 @@ class ALFWorldBenchmark:
     name = "alfworld"
 
     def __init__(self, data_dir: str | None = None, history_length: int = 2,
-                 memory: bool = False):
+                 memory: bool = False, workers: int = 0):
         self.data_dir = data_dir
         self.history_length = history_length
         self.memory = memory  # list visited locations in the prompt (H6 baseline)
+        if workers < 0:
+            raise ValueError("env.workers must be nonnegative")
+        self.workers = workers
+        self._pool = None
+
+    def episode_batch(self, tasks):
+        from empg.envs.batch import ALFWorldPool, ParallelBatch, SerialBatch
+        if not self.workers:
+            return SerialBatch(self, tasks)
+        if self._pool is None:
+            self._pool = ALFWorldPool(min(self.workers, len(tasks)))
+        return ParallelBatch(self._pool, tasks)
+
+    def close(self):
+        if self._pool is not None:
+            self._pool.close()
+            self._pool = None
 
     def tasks(self, split: str) -> list[str]:
         return collect_games(split, self.data_dir)

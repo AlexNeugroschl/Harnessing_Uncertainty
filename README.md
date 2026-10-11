@@ -8,9 +8,9 @@ ALFWorld**, and EMPG reshapes GRPO's advantage using the step-level entropy of t
 ## The algorithm
 
 A long-horizon agent receives one sparse outcome reward per episode. GRPO spreads that single scalar evenly over
-every step. The paper also shows (Prop. 1) that the size of a softmax policy gradient is coupled to entropy:
-confident steps get small updates and uncertain steps get large, noisy ones. EMPG fixes both problems with the
-agent's own uncertainty. The equation numbers below are the paper's, and each maps to one function in
+every step. The paper's Prop. 1 relates the expected squared **logit-space** score norm to **Rényi-2** entropy.
+EMPG uses Shannon token entropy as an empirical credit-assignment heuristic; improvement is a hypothesis,
+not a guarantee about neural-network gradients. The equation numbers below are the paper's, and each maps to one function in
 [empg/advantages.py](empg/advantages.py):
 
 | Eq. | Quantity | Function |
@@ -23,11 +23,11 @@ agent's own uncertainty. The equation numbers below are the paper's, and each ma
 | 8  | `A_mod = A_i · g(H_t) + ζ · f(H_t+1)` | `compute_advantages` |
 | 13 | `A_final = A_mod − mean_B A_mod` | `compute_advantages` |
 
-`g` multiplies the advantage, so it changes the size of the update but keeps its sign. It **amplifies** confident
+`g` multiplies the advantage, so it keeps its sign **before the final batch centering**. It **amplifies** confident
 correct steps, **penalises confident errors harder**, and **damps** uncertain steps. `f` is additive. It rewards
 actions that lead to a low-entropy next state, so it still ranks steps when every rollout in a group has the same
-outcome and GRPO's `A_i` is zero. The paper leaves one case undefined: a terminal step has no `t+1`. Here it
-gets `f = 0`.
+outcome and GRPO's `A_i` is zero. A last sampled step has no `t+1` and gets `f = 0`, following the paper's
+appendix pseudocode. This also applies to horizon truncations, where the missing successor is an approximation.
 
 ## Layout
 
@@ -36,6 +36,7 @@ empg/                      the algorithm (benchmark-agnostic)
   advantages.py            GRPO + EMPG advantage estimators (pure numpy)
   curiosity.py             count-based novelty bonus + exploration metrics (pure numpy; not in the paper)
   policy.py                LLM + LoRA: batched generation, logprob / entropy scoring
+  scoring.py               exact response-only output-head chunks + checkpointing
   rollout.py               multi-turn episodes, all envs stepped in lockstep
   loss.py                  token-level PPO-clip + k3 KL to the reference (adapter-off) model
   trainer.py               rollout → entropy → advantages → update
@@ -43,13 +44,15 @@ empg/                      the algorithm (benchmark-agnostic)
   config.py                dataclass config, YAML `inherit:`, dotted CLI overrides
   envs/base.py             Env / Benchmark protocols (add WebShop, Deep Search here)
   envs/alfworld_env.py     real ALFWorld (TextWorld), one env per game file, + state keys for curiosity
+  envs/batch.py worker.py   ordered parallel ALFWorld execution, with a serial reference path
 benchmarks/
   configs/base.yaml        shared settings (the `reduced` run size)
   configs/arms/            one small file per method: grpo, empg, ablations, curiosity arms
-  configs/tiers/           run sizes: smoke (minutes), small (~1.5 h/arm), reduced (~10 h/arm)
+  configs/tiers/           smoke, short small diagnostic, longer pilot, reduced confirmation budget
   train.py  evaluate.py    train one arm / evaluate per ALFWorld subtask
   suite.py  report.py      arms × seeds → paper-style tables, exploration table, curves
   explore_stats.py         curiosity plan Phase 0: exploration behaviour without training
+  profile.py statistics.py local bottleneck measurements + paired seed/task intervals
 docs/curiosity_research_plan.md   research plan for the curiosity extension
 tests/                     equation invariants, curiosity, configs, prompts, CPU end-to-end update
 ```
@@ -83,7 +86,7 @@ python -m benchmarks.train    --config empg --tier smoke         # minutes, end 
 python -m benchmarks.evaluate --config empg --tier smoke
 python -m benchmarks.suite    --tier small --arms grpo empg      # base + arms, train then eval
 python -m benchmarks.suite    --tier reduced --phase paper --seeds 0 1 2
-python -m benchmarks.report   --runs runs/small --out results/small
+python -m benchmarks.report   --runs runs/small --split valid_seen --out results/small
 ```
 
 Any config value can be overridden from the command line, for example `train.iterations=50`,
@@ -100,8 +103,9 @@ The suite follows the paper's ALFWorld protocol:
 - **Controlled comparison:** all arms share `base.yaml`, the same seeds and the same task sampling. They differ
   only in the `advantage:` block.
 
-Paper hyperparameters used unchanged: `k = k' = 1`, `ζ = 0.05`, KL coefficient 0.01, group-normalised outcome
-reward (10 × success), and a 0.1 invalid-action penalty, as in verl-agent.
+Core settings: `k = k' = 1`, `ζ = 0.05`, KL coefficient 0.01, group-normalised outcome
+reward (10 × success), and a 0.1 invalid-format penalty. Inadmissible actions with valid tags are measured as
+environment no-ops rather than invalid-format penalties.
 
 ### Differences from the paper (hardware: one 8GB laptop GPU)
 
@@ -112,7 +116,8 @@ reward (10 × success), and a 0.1 invalid-action penalty, as in verl-agent.
 | Batch | 16 tasks × group 8 | 2 tasks × group 8 |
 | Steps | 150, 50-turn episodes | 40 iterations, 20-turn training episodes (50 at eval), `reduced` tier |
 | Eval set | all 134 `valid_unseen` games | fixed random 48-game subset (`eval.max_tasks=0` for all) |
-| Seeds | not stated | 1 (GRPO vs EMPG); ablations and more seeds pending |
+| Seeds | 3 (Table 1) | 1 (GRPO vs EMPG); ablations and more seeds pending |
+| Entropy regularization | 0.001 (Table 3) | 0 (step entropy shapes advantages only) |
 | Framework | verl-agent (vLLM rollouts) | HF `generate` (~15 min per iteration on an RTX 5060 8GB) |
 
 ## Curiosity extension (research in progress)
@@ -162,6 +167,111 @@ python -m benchmarks.suite --tier small --phase screen                     # Pha
 python -m benchmarks.suite --tier small --arms grpo_cur_group advantage.curiosity.gate=no_success_signal     name=grpo_cur_group_gated                                              # Phase 3 variant
 ```
 
+## Speed
+
+Rollout generation takes most of each iteration. Three switches make it faster without changing the
+experiment. Scoring, entropy (`H_t`) and the update always run on the HF model being trained:
+
+- **Merged LoRA** (`policy.merge_lora: true`, the default for `backend: hf`): LoRA is merged into the
+  weights while generating, so decoding skips the adapter's extra matmuls. The frozen base weights are
+  restored **bit-exactly** afterwards from a CPU snapshot. That matters because they are also the KL reference.
+  `tests/test_trainer_smoke.py` checks the restore and that merged greedy output matches unmerged output.
+- **vLLM rollouts** (`policy.backend=vllm`): the vLLM engine keeps batching continuously, and it caches the
+  shared prompt prefix. During a rollout the HF model sits in CPU RAM. vLLM samples with the current
+  adapter, then sleeps so the update gets the whole GPU. vLLM pins its own torch build, so it needs its own
+  venv:
+  ```bash
+  EMPG_VLLM=1 EMPG_VENV=~/venvs/empg-vllm bash scripts/setup_wsl.sh
+  source ~/venvs/empg-vllm/bin/activate
+  python -m benchmarks.suite --tier small --arms grpo empg policy.backend=vllm
+  ```
+  vLLM samples from the same policy, but its numerics differ slightly from HF's. Use the **same backend for
+  every arm** in a comparison. Suite overrides apply to every run, including the base eval.
+  - **Eager mode by default** (`vllm_enforce_eager: true`). While asleep, vLLM keeps about 1.2 GiB instead of 2.3 GiB with CUDA
+    graphs. That is what makes room for the update on 8GB.
+  - **Environment fixes.** The engine disables the FlashInfer sampler, whose JIT build needs a full CUDA toolkit.
+    PyTorch's sampler draws from the same distribution. The engine also puts the pip-installed `nvcc` on PATH
+    for `torch.compile`.
+  - **One-time startup cost.** About 1–2.5 min per process.
+- **Sampling = the policy being scored.** Qwen's `generation_config` sets `repetition_penalty: 1.1`, and HF
+  `generate()` used to apply it. Rollouts and greedy eval therefore sampled from a penalised distribution, not
+  from π_θ. The measured gap, E[log p] + E[H] over sampled tokens, was −0.65 nats; after the fix it is
+  0.00 ± 0.02 for both backends. HF generation now passes `repetition_penalty=1.0`, like verl-agent and
+  vLLM. Runs made before this fix are not comparable with runs made after it.
+- **No silent VRAM spill.** On Windows/WSL the NVIDIA driver's *CUDA Sysmem Fallback Policy* lets
+  allocations beyond the 8GB overflow into shared system RAM. Nothing fails; the run just gets several times
+  slower. Turn it off: **NVIDIA Control Panel → Manage 3D settings → CUDA - Sysmem Fallback Policy → Prefer No
+  Sysmem Fallback**. After that, running out of memory raises a clear OOM error. If that happens, lower
+  `policy.gen_batch_size` / `policy.micro_batch_size`. Training logs `gpu_peak_gb` every iteration and warns when
+  the peak reaches physical VRAM.
+
+Measured on the RTX 5060 8GB (WSL), 2 games × group 8, with Sysmem Fallback still **on**:
+
+| | generate, 16 prompts | rollout, 5 turns | rollout, 20 turns (it 1 / it 2) | update, 20 turns (it 1 / it 2) |
+|---|---|---|---|---|
+| HF, unmerged LoRA (before) | – | 124–146 s | – | – |
+| HF, merged LoRA | ~10 s | 107–126 s | 366 / 230 s | 255 / 199 s |
+| vLLM (eager) | ~3.7 s | 70–72 s | 219 / 183 s | 553 / 195 s |
+
+vLLM generates about 3× faster. Most of the remaining rollout time is ALFWorld itself: creating and resetting 16
+envs takes about 32 s, and one turn of env stepping about 5 s. At 20 turns, the update also went past physical
+VRAM on both backends (peaks of 8.9 and 11.9 GiB reserved), so it was spilling. Turn the fallback off
+before comparing wall-clock times.
+
+**Response lengths (for choosing a `max_new_tokens` cap later).** The cap is still 256 (96 in `smoke`). Each
+run records every response's length, whether it reached the cap before EOS, and whether it parsed as valid:
+- `resp_lengths_train.jsonl`: one line per iteration.
+- `resp_lengths_eval_<split>.json`: from eval.
+- `metrics.jsonl`: `resp_len_mean/p99/max` and `trunc_rate`.
+- the eval JSON: a `resp_len` summary.
+
+`benchmarks.report` pools all of this into `response_lengths.md`, which gives p50/p90/p99/p99.9, max,
+`% truncated`, and how often truncation made the step invalid. A lower cap costs nothing only when it sits
+above what the model actually produces. Set it from p99.9 in that table, after checking it on a few trained arms, since
+lengths can drift during training.
+
 ## Results
 
 _Pending: produced by `benchmarks.suite` + `benchmarks.report`._
+
+## Research audit and faster experiments
+
+[docs/research_audit.md](docs/research_audit.md) records the theoretical limits, comparison bugs repaired,
+measured performance, and a staged experiment that can produce useful evidence within a smaller budget.
+The research question is testable; a short run or a negative pilot cannot establish that a technique works
+or fails on long-horizon tasks.
+
+The default ALFWorld configuration now uses four independent CPU workers (`env.workers=0` restores serial
+execution). Scoring projects only actual response tokens through the output head in bounded chunks and
+recomputes those head activations in backward. It retains exact full-vocabulary entropy and the token-mean PPO
+objective. `policy.chunked_head=false` restores the dense scoring path. Scoring and update microbatches are
+sorted by sequence length within the same optimizer minibatches to reduce padding. Floating-point rounding
+can differ; use the same implementation and backend for all arms.
+
+Training task selection uses a separate RNG from update shuffling, so episode length cannot change subsequent
+task assignments. Metrics include cumulative environment steps, response tokens and training seconds.
+Evaluation stores per-task outcomes. Reports add paired seed/task bootstrap intervals and curves against those
+compute measures. Suite resumption checks configuration fingerprints and rejects old or incompatible results.
+Use a fresh output directory for the new implementation.
+
+```bash
+# Measure the local bottlenecks and verify serial/parallel environment equivalence.
+python -m benchmarks.profile --config empg --tier small --env-only
+python -m benchmarks.profile --config empg --tier small --turns 3 --samples 8
+
+# Inspect exploration, successful groups and truncation before training.
+python -m benchmarks.explore_stats --config grpo --tier pilot --games 12 --group 4 --games-per-batch 2
+
+# Development screen: 8 iterations, group 4, 30-turn training, 50-turn evaluation.
+# valid_seen is used for selection; keep valid_unseen for a fixed confirmation run.
+python -m benchmarks.suite --tier pilot --arms grpo grpo_cur_episodic --seeds 0 --skip-base
+python -m benchmarks.report --runs runs/pilot --split valid_seen --out results/pilot
+
+# Optional budget: stop after a complete batch, save, then evaluate.
+# The elapsed budget covers rollout+update, excludes startup/evaluation, and can overshoot by one batch.
+python -m benchmarks.suite --tier pilot --arms grpo grpo_cur_episodic --seeds 0 --skip-base train.max_seconds=3600 out_dir=runs/pilot_1h
+```
+
+`pilot` changes group size/horizon and therefore tests a smaller experiment, not an exact paper replication.
+Use the same tier and budget for every compared arm. `train.max_env_steps` can also bound training; both
+budgets stop at batch boundaries and record the actual completed work in `training_complete.json`.

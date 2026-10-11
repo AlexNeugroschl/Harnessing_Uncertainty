@@ -73,6 +73,67 @@ def test_score_matches_forward(policy):
     torch.testing.assert_close(ref[0], lp[0], atol=1e-4, rtol=0)
 
 
+def test_chunked_policy_matches_dense_with_unequal_lengths(policy):
+    pol, _ = policy
+    prompts = [pol.encode_prompt("hello"), pol.encode_prompt("a longer prompt about a door")]
+    responses = [[1, 2, 3], [4, 5]]
+    params = pol.parameters()
+    pol.model.eval()
+    saved = pol.cfg.chunked_head
+    try:
+        pol.cfg.chunked_head = False
+        lp, ent, mask = pol.forward_logprobs(prompts, responses, with_entropy=True)
+        dense_lp, dense_ent = lp.detach(), ent.detach()
+        expected = torch.autograd.grad(lp[mask].sum(), params, allow_unused=True)
+        pol.cfg.chunked_head = True
+        lp, ent, actual_mask = pol.forward_logprobs(prompts, responses, with_entropy=True)
+        actual = torch.autograd.grad(lp[actual_mask].sum(), params, allow_unused=True)
+        assert torch.equal(mask, actual_mask)
+        torch.testing.assert_close(lp[mask], dense_lp[mask], atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(ent[mask], dense_ent[mask], atol=1e-5, rtol=1e-5)
+        for a, b in zip(actual, expected):
+            if b is not None:
+                torch.testing.assert_close(a, b, atol=1e-5, rtol=1e-4)
+    finally:
+        pol.cfg.chunked_head = saved
+
+
+def test_generation_config_cannot_change_the_sampled_distribution(policy):
+    """Rollouts must sample from the policy that is scored. Qwen's generation_config
+    ships repetition_penalty=1.1, which generate() would otherwise apply."""
+    pol, _ = policy
+    gc = pol.model.generation_config
+    old = gc.repetition_penalty
+    try:
+        gc.repetition_penalty = 1.0
+        _, r_plain, _ = pol.generate(["hello hello hello", "open the door"], greedy=True)
+        gc.repetition_penalty = 5.0
+        _, r_pen, _ = pol.generate(["hello hello hello", "open the door"], greedy=True)
+    finally:
+        gc.repetition_penalty = old
+    assert r_pen == r_plain
+
+
+def test_merged_generation_matches_and_restores_weights(policy):
+    pol, _ = policy
+    lora = [p for n, p in pol.model.named_parameters() if "lora_B" in n]
+    saved = [p.detach().clone() for p in lora]
+    torch.manual_seed(0)
+    for p in lora:  # non-zero adapter, so merging actually changes the weights
+        p.data.normal_(0, 0.05)
+    base = {n: p.detach().clone() for n, p in pol._lora_base_weights().items()}
+    pol.cfg.merge_lora = False
+    _, r_plain, _ = pol.generate(["hello there", "open the door"], greedy=True)
+    pol.cfg.merge_lora = True
+    _, r_merged, _ = pol.generate(["hello there", "open the door"], greedy=True)
+    assert r_merged == r_plain
+    for n, p in pol._lora_base_weights().items():
+        assert torch.equal(p, base[n])  # bit-exact restore: the KL reference cannot drift
+    assert not any(getattr(m, "merged", False) for m in pol.model.modules())
+    for p, s in zip(lora, saved):
+        p.data.copy_(s)
+
+
 @pytest.mark.parametrize("method,curiosity", [("grpo", 0.0), ("empg", 0.0), ("empg", 0.1)])
 def test_one_update(policy, method, curiosity):
     pol, cfg = policy
@@ -95,3 +156,33 @@ def test_one_update(policy, method, curiosity):
     assert stats["entropy_mean"] > 0
     assert all(s.entropy > 0 for t in trajs for s in t.steps)
     assert any(not torch.equal(a, b) for a, b in zip(before, after))
+    assert stats["resp_len_max"] <= pol.cfg.max_new_tokens
+    assert 0 <= stats["trunc_rate"] <= 1
+
+
+def test_length_stats():
+    from empg.rollout import length_stats
+    st = length_stats({"len": [10, 20, 256, 256], "truncated": [0, 0, 1, 1],
+                       "valid": [1, 1, 0, 1]}, cap=256)
+    assert st["n"] == 4 and st["max"] == 256 and st["cap"] == 256
+    assert st["trunc_rate"] == 0.5 and st["trunc_invalid"] == 0.5
+    assert length_stats({"len": [], "truncated": [], "valid": []}) == {}
+
+
+def test_truncated_flag(policy):
+    pol, _ = policy
+    cap, eos = pol.cfg.max_new_tokens, pol.tokenizer.eos_token_id
+    assert pol.truncated([1] * cap)
+    assert not pol.truncated([1] * (cap - 1) + [eos])
+    assert not pol.truncated([1, eos])
+
+
+def test_training_rejects_transformed_sampling(policy):
+    pol, cfg = policy
+    saved = pol.cfg.temperature
+    try:
+        pol.cfg.temperature = 0.7
+        with pytest.raises(ValueError, match="on-policy"):
+            update(pol, None, [], cfg, np.random.default_rng(0))
+    finally:
+        pol.cfg.temperature = saved

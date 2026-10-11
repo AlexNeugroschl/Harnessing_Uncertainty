@@ -12,6 +12,7 @@ rarely revisits and groups are already diverse, curiosity has little room.
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import json
 from pathlib import Path
 
@@ -21,15 +22,17 @@ from benchmarks.common import add_args, load
 from empg.curiosity import episodic_counts, exploration_stats
 from empg.envs.base import make_benchmark
 from empg.policy import LLMPolicy
-from empg.rollout import run_episodes
+from empg.rollout import length_stats, response_lengths, run_episodes
 from empg.trainer import seed_everything
 
 KEYS = ("parsed", "physical", "knowledge", "obs")
 
 
 def trajectory_record(tr, bench) -> dict:
-    rec = {"task_type": bench.task_type(tr.task), "won": tr.won, "length": len(tr.steps),
-           "invalid": tr.n_invalid}
+    rec = {"task": tr.task, "group": tr.group, "task_type": bench.task_type(tr.task),
+           "won": tr.won, "length": len(tr.steps), "invalid": tr.n_invalid,
+           "truncated": sum(s.truncated for s in tr.steps),
+           "response_tokens": sum(len(s.response_ids) for s in tr.steps)}
     for key in KEYS:
         seq = tr.key_seq(key)
         counts = episodic_counts([seq])[0]
@@ -80,21 +83,25 @@ def main():
     bench = make_benchmark(cfg.benchmark, **cfg.env)
     train_tasks = bench.tasks("train")
     chosen = [train_tasks[i] for i in rng.choice(len(train_tasks), args.games, replace=False)]
-    policy = LLMPolicy(cfg.policy)
+    policy = LLMPolicy(cfg.policy, seed=cfg.seed)
     if args.adapter:
         policy.load_adapter(args.adapter)
 
     trajs = []
-    for s in range(0, len(chosen), args.games_per_batch):
-        batch = chosen[s:s + args.games_per_batch]
-        tasks = [t for t in batch for _ in range(args.group)]
-        groups = [s + g for g in range(len(batch)) for _ in range(args.group)]
-        trajs += run_episodes(policy, bench, tasks, groups, cfg.train.max_steps,
-                              cfg.train.success_reward, cfg.train.invalid_penalty)
-        print(f"  {min(s + args.games_per_batch, len(chosen))}/{len(chosen)} games", flush=True)
+    with ExitStack() as cleanup, policy.generation():
+        if hasattr(bench, "close"):
+            cleanup.callback(bench.close)
+        for s in range(0, len(chosen), args.games_per_batch):
+            batch = chosen[s:s + args.games_per_batch]
+            tasks = [t for t in batch for _ in range(args.group)]
+            groups = [s + g for g in range(len(batch)) for _ in range(args.group)]
+            trajs += run_episodes(policy, bench, tasks, groups, cfg.train.max_steps,
+                                  cfg.train.success_reward, cfg.train.invalid_penalty)
+            print(f"  {min(s + args.games_per_batch, len(chosen))}/{len(chosen)} games", flush=True)
 
     records = [trajectory_record(tr, bench) for tr in trajs]
     summary = summarize(records, trajs)
+    summary["resp_len"] = length_stats(response_lengths(trajs), cfg.policy.max_new_tokens)
     out = Path(args.out) if args.out else Path(cfg.out_dir) / "explore_stats.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({"summary": summary, "trajectories": records}, indent=2))

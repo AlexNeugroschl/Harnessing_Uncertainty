@@ -1,5 +1,7 @@
 # torch is installed separately with CUDA 12.8 wheels (see scripts/setup_wsl.sh):
 #   pip install torch --index-url https://download.pytorch.org/whl/cu128
+# Optional, for policy.backend=vllm (brings its own torch; use a separate venv):
+#   EMPG_VLLM=1 EMPG_VENV=~/venvs/empg-vllm bash scripts/setup_wsl.sh
 transformers>=4.50
 peft>=0.13
 accelerate>=1.0

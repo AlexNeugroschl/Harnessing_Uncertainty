@@ -11,11 +11,14 @@ Each run is a subprocess so GPU memory is fully released between runs.
 from __future__ import annotations
 
 import argparse
+import dataclasses
+import json
 import subprocess
 import sys
 
 from benchmarks.common import BASE, arms, load, tiers
 from benchmarks.evaluate import eval_path
+from empg.config import config_fingerprint
 
 # Named arm sets from docs/curiosity_research_plan.md.
 PHASES = {
@@ -42,26 +45,47 @@ def main():
     ap.add_argument("overrides", nargs="*", help="dotted overrides applied to every run")
     args = ap.parse_args()
     selected = args.arms or PHASES.get(args.phase) or PHASES["paper"]
+    names = [load(arm, args.tier, args.overrides).name for arm in selected]
+    if len(set(names)) != len(names):
+        ap.error("selected arms resolve to the same run name; remove the shared name= override")
 
     if not args.skip_base:
         cfg = load(BASE, args.tier, args.overrides)
-        if not eval_path(cfg, base=True).exists():
+        if not _matching_eval(eval_path(cfg, base=True), cfg):
             run("benchmarks.evaluate", BASE, args.tier, 0, args.overrides, "--base")
 
     for seed in args.seeds:
         for arm in selected:
             cfg = load(arm, args.tier, args.overrides, seed)
-            if eval_path(cfg).exists():
+            if _matching_eval(eval_path(cfg), cfg):
                 print(f"skip {cfg.name} s{seed} (done)")
                 continue
-            if not (cfg.run_dir / "adapter").exists() or not _finished(cfg):
+            finished = _finished(cfg)  # validate config even if a partial run has no adapter
+            if not (cfg.run_dir / "adapter").exists() or not finished:
                 run("benchmarks.train", arm, args.tier, seed, args.overrides)
             run("benchmarks.evaluate", arm, args.tier, seed, args.overrides)
 
 
 def _finished(cfg) -> bool:
+    saved = cfg.run_dir / "config.json"
+    if saved.exists() and json.loads(saved.read_text()) != dataclasses.asdict(cfg):
+        raise ValueError(f"{cfg.run_dir} contains a different configuration. "
+                         "Choose a new name= or out_dir= to preserve that experiment.")
+    completed = cfg.run_dir / "training_complete.json"
+    if completed.exists():
+        return json.loads(completed.read_text()).get("config_fingerprint") == config_fingerprint(cfg)
     m = cfg.run_dir / "metrics.jsonl"
     return m.exists() and sum(1 for _ in m.open()) >= cfg.train.iterations
+
+
+def _matching_eval(path, cfg):
+    if not path.exists():
+        return False
+    saved = json.loads(path.read_text())
+    if saved.get("config_fingerprint") != config_fingerprint(cfg):
+        raise ValueError(f"{path} has an old or different experiment configuration. "
+                         "Choose a new out_dir= (or name= for an arm) before resuming.")
+    return True
 
 
 if __name__ == "__main__":

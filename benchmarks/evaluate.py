@@ -8,41 +8,83 @@ from __future__ import annotations
 
 import argparse
 import json
+from contextlib import ExitStack
 from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
 
 from benchmarks.common import add_args, load
-from empg.config import Config
+from empg.config import Config, config_fingerprint
 from empg.envs.base import make_benchmark
 from empg.policy import LLMPolicy
-from empg.rollout import run_episodes
+from empg.rollout import length_stats, response_lengths, run_episodes
 from empg.trainer import seed_everything
 
 
-def evaluate(policy: LLMPolicy, cfg: Config, log=print) -> dict:
+def select_tasks(tasks, bench, ec):
+    """A deterministic panel independent of the arm and training seed."""
+    if ec.selection not in ("random", "stratified") or ec.max_tasks < 0:
+        raise ValueError("invalid evaluation selection/max_tasks")
+    if not ec.max_tasks or ec.max_tasks >= len(tasks):
+        return tasks
+    rng = np.random.default_rng(ec.selection_seed)
+    if ec.selection == "random":
+        pick = rng.choice(len(tasks), ec.max_tasks, replace=False)
+    else:
+        types = sorted({bench.task_type(t) for t in tasks})
+        buckets = [np.array([i for i, t in enumerate(tasks) if bench.task_type(t) == typ])
+                   for typ in types]
+        if ec.max_tasks < len(types):
+            raise ValueError("stratified panel needs at least one task per type")
+        sizes = np.array([len(b) for b in buckets])
+        ideal = ec.max_tasks * sizes / sizes.sum()
+        counts = np.minimum(sizes, np.maximum(1, np.floor(ideal).astype(int)))
+        while counts.sum() > ec.max_tasks:
+            i = np.argmax(np.where(counts > 1, counts - ideal, -np.inf))
+            counts[i] -= 1
+        while counts.sum() < ec.max_tasks:
+            i = np.argmax(np.where(counts < sizes, ideal - counts, -np.inf))
+            counts[i] += 1
+        pick = np.concatenate([rng.choice(b, n, replace=False) for b, n in zip(buckets, counts)])
+    return [tasks[i] for i in sorted(pick)]
+
+
+def evaluate(policy: LLMPolicy, cfg: Config, log=print) -> tuple[dict, dict]:
     ec = cfg.eval
     bench = make_benchmark(cfg.benchmark, **cfg.env)
-    tasks = bench.tasks(ec.split)
-    if ec.max_tasks and ec.max_tasks < len(tasks):
-        # Games are sorted by task type, so take a fixed random subset (same for
-        # every arm and seed) rather than the first N.
-        pick = np.random.default_rng(0).choice(len(tasks), ec.max_tasks, replace=False)
-        tasks = [tasks[i] for i in sorted(pick)]
+    tasks = select_tasks(bench.tasks(ec.split), bench, ec)
+    if not tasks:
+        raise ValueError("empty evaluation split")
     by_type = defaultdict(list)
-    for s in range(0, len(tasks), ec.batch_envs):
-        chunk = tasks[s:s + ec.batch_envs]
-        trajs = run_episodes(policy, bench, chunk, list(range(len(chunk))), ec.max_steps,
-                             cfg.train.success_reward, cfg.train.invalid_penalty,
-                             greedy=ec.greedy)
-        for tr in trajs:
-            by_type[bench.task_type(tr.task)].append(tr.won)
-        log(f"  eval {min(s + ec.batch_envs, len(tasks))}/{len(tasks)}")
+    per_task = []
+    lengths = {"len": [], "truncated": [], "valid": []}
+    with ExitStack() as cleanup, policy.generation():  # one session for all chunks
+        if hasattr(bench, "close"):
+            cleanup.callback(bench.close)
+        for s in range(0, len(tasks), ec.batch_envs):
+            chunk = tasks[s:s + ec.batch_envs]
+            trajs = run_episodes(policy, bench, chunk, list(range(len(chunk))), ec.max_steps,
+                                 cfg.train.success_reward, cfg.train.invalid_penalty,
+                                 greedy=ec.greedy)
+            for tr in trajs:
+                by_type[bench.task_type(tr.task)].append(tr.won)
+                per_task.append({"task": tr.task, "type": bench.task_type(tr.task),
+                                 "won": tr.won, "steps": len(tr.steps), "invalid": tr.n_invalid})
+            for k, v in response_lengths(trajs).items():
+                lengths[k] += v
+            log(f"  eval {min(s + ec.batch_envs, len(tasks))}/{len(tasks)}")
     res = {t: float(np.mean(v)) for t, v in sorted(by_type.items())}
     res["all"] = float(np.mean([w for v in by_type.values() for w in v]))
     res["n"] = {t: len(v) for t, v in by_type.items()}
-    return res
+    res["resp_len"] = length_stats(lengths, policy.cfg.max_new_tokens)
+    res.update(seed=cfg.seed, per_task=per_task, config_fingerprint=config_fingerprint(cfg),
+               protocol={"split": ec.split, "max_steps": ec.max_steps, "greedy": ec.greedy,
+                         "backend": cfg.policy.backend, "model": cfg.policy.model_name,
+                         "max_new_tokens": cfg.policy.max_new_tokens,
+                         "selection": ec.selection, "selection_seed": ec.selection_seed,
+                         "history_length": cfg.env.get("history_length", 2)})
+    return res, {"cap": policy.cfg.max_new_tokens, **lengths}
 
 
 def eval_path(cfg: Config, base: bool = False) -> Path:
@@ -57,13 +99,14 @@ def main():
     args = ap.parse_args()
     cfg = load(args.config, args.tier, args.overrides, args.seed)
     seed_everything(cfg.seed)
-    policy = LLMPolicy(cfg.policy)
+    policy = LLMPolicy(cfg.policy, seed=cfg.seed)
     if not args.base:
         policy.load_adapter(str(cfg.run_dir / "adapter"))
-    res = evaluate(policy, cfg)
+    res, lengths = evaluate(policy, cfg)
     out = eval_path(cfg, args.base)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(res, indent=2))
+    (out.parent / f"resp_lengths_eval_{cfg.eval.split}.json").write_text(json.dumps(lengths))
     print(json.dumps(res, indent=2))
 
 
