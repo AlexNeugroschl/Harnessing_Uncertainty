@@ -1,0 +1,12 @@
+# Full local comparison: long horizons and the entire held-out ALFWorld split.
+# Retains the laptop-sized training batch/LoRA setup; not a paper-scale replication.
+out_dir: runs/full
+train:
+  iterations: 40
+  max_steps: 50
+  save_every: 10
+eval:
+  split: valid_unseen
+  max_tasks: 0
+  max_steps: 50
+  selection: stratified

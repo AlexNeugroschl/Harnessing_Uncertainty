@@ -14,6 +14,7 @@ Writes:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 from collections import defaultdict
 from pathlib import Path
@@ -35,22 +36,36 @@ LABELS = {
     "empg_seek_uncertainty": "EMPG, clarity sign flipped",
     **dict(ARMS),
 }
-# Fixed categorical order (identity follows the arm, never its rank). Slots 1-8;
-# past 8 arms, filter with --arms rather than inventing hues.
-PALETTE = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
-COLORS = {"grpo": PALETTE[0], "empg": PALETTE[1], "empg_g_only": PALETTE[2], "empg_f_only": PALETTE[3]}
+# Fixed categorical identities for all ten configured arms.
+PALETTE = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948",
+           "#795548", "#0097a7"]
+COLORS = {arm: color for arm, color in zip(
+    [a for a, _ in ARMS] + [a for a in LABELS if a not in dict(ARMS)], PALETTE)}
 EXPLORE_COLS = [("success", "train success"), ("revisit_rate", "revisit rate"), ("noop_rate", "no-op rate"),
                 ("unique_states", "unique states / ep"), ("group_coverage", "group coverage"),
                 ("any_success_frac", "P(group ≥1 success)"), ("no_signal_frac", "no-signal groups"),
                 ("success_len", "steps to success"), ("intrinsic_share", "intrinsic share")]
 
 
-def load(runs: Path, split: str):
-    evals, curves = defaultdict(list), defaultdict(list)
+def run_dirs(runs: Path, seeds=None):
+    """Use the same seed selection for every artifact, including token lengths."""
+    if not runs.exists():
+        return
     for d in sorted(runs.iterdir()):
         if not d.is_dir():
             continue
-        arm = "base" if d.name == "base" else d.name.rsplit("_s", 1)[0]
+        if d.name == "base":
+            yield d, "base"
+            continue
+        arm, separator, seed = d.name.rpartition("_s")
+        if seeds is not None and (not separator or seed not in {str(s) for s in seeds}):
+            continue
+        yield d, arm if separator else d.name
+
+
+def load(runs: Path, split: str, seeds=None):
+    evals, curves = defaultdict(list), defaultdict(list)
+    for d, arm in run_dirs(runs, seeds):
         e = d / f"eval_{split}.json"
         if e.exists():
             evals[arm].append(json.loads(e.read_text()))
@@ -195,7 +210,7 @@ def explore_table(curves, last: int = 5) -> str:
     return out
 
 
-def load_lengths(runs: Path, split: str) -> dict:
+def load_lengths(runs: Path, split: str, seeds=None) -> dict:
     """{arm: {phase: raw lengths}} from the resp_lengths_* files, pooled over seeds."""
     pooled = defaultdict(lambda: defaultdict(
         lambda: {"len": [], "truncated": [], "valid": [], "cap": set()}))
@@ -206,10 +221,7 @@ def load_lengths(runs: Path, split: str) -> dict:
             d[k] += rec[k]
         d["cap"].add(rec["cap"])
 
-    for d in sorted(runs.iterdir()):
-        if not d.is_dir():
-            continue
-        arm = "base" if d.name == "base" else d.name.rsplit("_s", 1)[0]
+    for d, arm in run_dirs(runs, seeds):
         t = d / "resp_lengths_train.jsonl"
         if t.exists():
             recs = [json.loads(line) for line in t.open()]
@@ -240,17 +252,59 @@ def lengths_table(pooled: dict) -> str:
     return out
 
 
+def write_run_comparison(runs: Path, split: str, out: Path, arms=None, seeds=None):
+    """One row per seed, with observed training cost (startup/evaluation excluded)."""
+    rows = []
+    for d, arm in run_dirs(runs, seeds):
+        if arms and arm not in arms and arm != "base":
+            continue
+        evaluation = d / f"eval_{split}.json"
+        metrics = d / "metrics.jsonl"
+        ev = json.loads(evaluation.read_text()) if evaluation.exists() else {}
+        records = [json.loads(line) for line in metrics.read_text().splitlines() if line.strip()] if metrics.exists() else []
+        if not ev and not records:
+            continue
+        last = records[-1] if records else {}
+        row = {"method": arm, "seed": ev.get("seed", d.name.rsplit("_s", 1)[-1]) if arm != "base" else "",
+               "status": "evaluated" if ev else "not evaluated",
+               "success_pct": 100 * ev["all"] if "all" in ev else "",
+               "eval_tasks": len(ev.get("per_task", [])) or sum(ev.get("n", {}).values()) or "",
+               "iterations": last.get("iteration", ""),
+               "env_steps": last.get("env_steps_total", ""),
+               "response_tokens": last.get("response_tokens_total", ""),
+               "training_seconds": last.get("seconds_total", "")}
+        rows.append(row)
+    fields = ["method", "seed", "status", "success_pct", "eval_tasks", "iterations",
+              "env_steps", "response_tokens", "training_seconds"]
+    with (out / "runs.csv").open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+    text = ("### Individual runs\n\nTraining time includes rollout and updates, excluding model startup, "
+            "checkpoint saves and evaluation. Missing evaluations are not zero successes.\n\n"
+            "| Method | Seed | Status | Success (%) | Eval tasks | Iterations | Env steps | Training (h) |\n"
+            "|---|---:|---|---:|---:|---:|---:|---:|\n")
+    for r in rows:
+        success = f"{r['success_pct']:.1f}" if r["success_pct"] != "" else "—"
+        hours = f"{r['training_seconds'] / 3600:.2f}" if r["training_seconds"] != "" else "—"
+        text += (f"| {r['method']} | {r['seed']} | {r['status']} | {success} | {r['eval_tasks']} | "
+                 f"{r['iterations']} | {r['env_steps']} | {hours} |\n")
+    (out / "runs.md").write_text(text, encoding="utf-8")
+    return text
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", default="runs/reduced")
     ap.add_argument("--split", default="valid_unseen")
     ap.add_argument("--out", default="results")
-    ap.add_argument("--arms", nargs="+", help="only these runs (plus base), e.g. to keep plots ≤8 series")
+    ap.add_argument("--arms", nargs="+", help="only these methods (plus base)")
+    ap.add_argument("--seeds", nargs="+", type=int, help="only these training seeds (plus base)")
     ap.add_argument("--baseline", default="grpo", help="baseline for paired task/seed comparisons")
     args = ap.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    evals, curves = load(Path(args.runs), args.split)
+    evals, curves = load(Path(args.runs), args.split, args.seeds)
     if args.arms:
         evals = {a: v for a, v in evals.items() if a in args.arms or a == "base"}
         curves = {a: v for a, v in curves.items() if a in args.arms}
@@ -263,15 +317,26 @@ def main():
     (out / "ablation.md").write_text(t2)
     t3 = "### Exploration during training (mean of last 5 iterations)\n\n" + explore_table(curves)
     (out / "exploration.md").write_text(t3)
+    lengths = load_lengths(Path(args.runs), args.split, args.seeds)
+    if args.arms:
+        lengths = {a: v for a, v in lengths.items() if a in args.arms or a == "base"}
     t4 = ("### Response lengths (tokens) vs the `max_new_tokens` cap\n\n"
           "A cap is free only if (almost) no response reaches it. While `% truncated` is near 0, "
           "p99 and p99.9 show where a lower cap would start cutting responses off.\n\n"
-          + lengths_table(load_lengths(Path(args.runs), args.split)))
+          + lengths_table(lengths))
     (out / "response_lengths.md").write_text(t4)
     (out / "summary.json").write_text(json.dumps(evals, indent=2))
     paired_md, paired = comparisons(evals, args.baseline)
     (out / "paired_comparisons.md").write_text(paired_md)
     (out / "paired_comparisons.json").write_text(json.dumps(paired, indent=2))
+    all_rows = with_extra_arms([("base", "Zero-shot base"), *ARMS], evals)
+    individual = write_run_comparison(Path(args.runs), args.split, out, args.arms, args.seeds)
+    combined = (f"# ALFWorld `{args.split}` benchmark comparison\n\n"
+                "Success rates are percentages; ± is sample standard deviation across training seeds. "
+                "Paired intervals below are unadjusted for multiple comparisons. "
+                "Selecting a winner among many methods needs fresh confirmation.\n\n"
+                + table(evals, all_rows, SUBTASKS) + "\n" + paired_md + "\n" + individual)
+    (out / "comparison.md").write_text(combined, encoding="utf-8")
     if curves:
         plot(curves, out / "training_curves.png")
         for x in ("env_steps_total", "response_tokens_total", "seconds_total"):

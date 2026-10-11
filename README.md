@@ -32,6 +32,7 @@ appendix pseudocode. This also applies to horizon truncations, where the missing
 ## Layout
 
 ```
+run_benchmarks.py           one entry point: train, evaluate, estimate runtime and write reports
 empg/                      the algorithm (benchmark-agnostic)
   advantages.py            GRPO + EMPG advantage estimators (pure numpy)
   curiosity.py             count-based novelty bonus + exploration metrics (pure numpy; not in the paper)
@@ -48,7 +49,7 @@ empg/                      the algorithm (benchmark-agnostic)
 benchmarks/
   configs/base.yaml        shared settings (the `reduced` run size)
   configs/arms/            one small file per method: grpo, empg, ablations, curiosity arms
-  configs/tiers/           smoke, short small diagnostic, longer pilot, reduced confirmation budget
+  configs/tiers/           smoke, small, pilot, reduced, full (50 turns + entire unseen split)
   train.py  evaluate.py    train one arm / evaluate per ALFWorld subtask
   suite.py  report.py      arms × seeds → paper-style tables, exploration table, curves
   explore_stats.py         curiosity plan Phase 0: exploration behaviour without training
@@ -76,6 +77,55 @@ source ~/venvs/empg/bin/activate
 ```
 
 ## Running
+
+For training, evaluation **and comparison tables in one command**, run the root file:
+
+```bash
+python run_benchmarks.py --estimate-only   # preview the remaining workload without loading a model
+python run_benchmarks.py                   # full local benchmark: all 10 methods × seeds 0,1,2 + base
+```
+
+This also works from Windows Python: the file forwards to `Ubuntu-24.04` in WSL and
+`~/venvs/empg/bin/python`. For another setup, set `EMPG_WSL_DISTRO` and/or
+`EMPG_WSL_PYTHON` (an absolute Linux Python path). Inside WSL, use the activated environment above.
+
+The `full` tier retains the laptop-sized LoRA setup, with 40 training iterations,
+2 tasks × 8 sibling episodes, 50-turn training/evaluation horizons, and all 134
+`valid_unseen` evaluation tasks. It is a full **local** comparison, not a replication of the
+paper's larger training budget. On this RTX 5060 Laptop 8GB, a rough extrapolation from the
+local profiles is **9.5–28.6 days for all 30 trained runs**, with a full-horizon estimate of
+19.1 days. Short profile measurements do not capture long-context costs; this is a workload
+estimate, not a measured timing interval or a promise that 40 iterations establish an effect.
+
+For a focused development comparison before that commitment:
+
+```bash
+python run_benchmarks.py --tier pilot --arms grpo grpo_cur_episodic --seeds 0 --estimate-only
+python run_benchmarks.py --tier pilot --arms grpo grpo_cur_episodic --seeds 0
+python run_benchmarks.py --tier smoke --arms grpo empg --seeds 0   # plumbing check only
+```
+
+The two-method pilot is estimated at **about 1.3–3.8 hours**, using `valid_seen` for development.
+It can reveal exploration behavior and obvious failures; a null result cannot rule out a
+long-horizon learning effect. For confirmation, fix the candidate before evaluating on
+`valid_unseen`, for example `--tier full --arms grpo grpo_cur_episodic --seeds 0 1 2`.
+Comparisons across all ten methods are exploratory; their intervals are not adjusted for
+selecting the best method.
+
+Results go to `runs/<tier>/` and reports to `results/<tier>/`. The runner generates:
+
+- `comparison.md`: all methods, per-subtask success, seed variability, paired differences and individual runs.
+- `runs.md` / `runs.csv`: one row per seed, including success, task count, training steps and measured training time.
+- Exploration and response-length tables, paired comparison JSON, and training curves by iteration, steps, tokens and time.
+- `benchmark_run.json`: resolved configurations, estimated remaining work, status and observed suite elapsed time.
+
+Re-run the same command to skip completed training/evaluation. An interrupted training run
+restarts training; it does not resume optimizer state. The runner validates existing
+configurations before starting new work and attempts partial reports when a later run fails.
+Use `--report-only` to regenerate tables, or `--runs` and `--out` to keep an experiment separate.
+Paths are relative to this repository, or absolute Linux paths when running through WSL.
+Reports include only the requested methods and seeds. Shared dotted overrides go after `--`,
+for example `-- train.iterations=20`; use a fresh `--runs` directory when changing a protocol.
 
 `--config` takes an arm name (a file in `configs/arms/`) or a YAML path. `--tier` sets the run size, and each
 tier writes to its own `runs/<tier>/` folder.
