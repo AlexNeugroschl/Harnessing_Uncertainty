@@ -82,8 +82,22 @@ For training, evaluation **and comparison tables in one command**, run the root 
 
 ```bash
 python run_benchmarks.py --estimate-only   # preview the remaining workload without loading a model
-python run_benchmarks.py                   # full local benchmark: all 10 methods × seeds 0,1,2 + base
+python run_benchmarks.py                   # enabled methods × seeds 0,1,2 + untrained base
 ```
+
+The `ENABLED_METHODS` list near the top of `run_benchmarks.py` lists all ten methods on
+separate lines. Comment out a line to disable its run; uncomment it to enable it.
+By default **GRPO**, **EMPG**, **GRPO + group curiosity**, and **EMPG + episodic curiosity**
+are enabled. `--arms` overrides the list for one invocation.
+
+The two curiosity priorities test different ideas: group novelty rewards reaching states
+that few sibling rollouts visit, while EMPG plus episodic novelty tests whether exploration
+complements the clarity bonus. These are hypotheses, not demonstrated winners. Compare each
+against its matching baseline; this four-method selection cannot isolate the effect of
+episodic versus group scope or establish a curiosity/EMPG interaction. Enable
+`grpo_cur_episodic` next for those comparisons, and `grpo_memory` to check whether a gain
+comes from compensating for the short prompt history. The oracle, sign-flip and g/f-only
+variants are useful diagnostics after a candidate shows a gain in task success.
 
 This also works from Windows Python: the file forwards to `Ubuntu-24.04` in WSL and
 `~/venvs/empg/bin/python`. For another setup, set `EMPG_WSL_DISTRO` and/or
@@ -93,8 +107,10 @@ The `full` tier retains the laptop-sized LoRA setup, with 40 training iterations
 2 tasks × 8 sibling episodes, 50-turn training/evaluation horizons, and all 134
 `valid_unseen` evaluation tasks. It is a full **local** comparison, not a replication of the
 paper's larger training budget. On this RTX 5060 Laptop 8GB, a rough extrapolation from the
-local profiles is **9.5–28.6 days for all 30 trained runs**, with a full-horizon estimate of
-19.1 days. Short profile measurements do not capture long-context costs; this is a workload
+local profiles is **about 4–12 days for the default four methods × three seeds**, with a
+full-horizon estimate around 7.7 days. Uncommenting all ten methods increases that to
+**9.5–28.6 days for 30 trained runs**, with a full-horizon estimate of 19.1 days.
+Short profile measurements do not capture long-context costs; this is a workload
 estimate, not a measured timing interval or a promise that 40 iterations establish an effect.
 
 For a focused development comparison before that commitment:

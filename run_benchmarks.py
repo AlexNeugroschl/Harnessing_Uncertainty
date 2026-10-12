@@ -22,6 +22,23 @@ import time
 
 ROOT = Path(__file__).resolve().parent
 
+# Comment/uncomment one line per method to choose the default experiment.
+# --arms overrides this list. The untrained base model is evaluated separately
+# unless --skip-base is passed. "grpo" is the regular trained baseline.
+# These are research priorities, not an empirically established performance ranking.
+ENABLED_METHODS = [
+    "grpo",                   # Regular GRPO: outcome-reward baseline.
+    "empg",                   # EMPG: entropy scaling + future clarity.
+    "grpo_cur_group",         # Curiosity: explore states few sibling rollouts reach.
+    "empg_cur_episodic",      # Curiosity + EMPG: test novelty alongside clarity.
+    # "grpo_cur_episodic",     # Per-episode novelty; next control for novelty scope.
+    # "grpo_memory",           # Visited-location prompt; control for forgetting.
+    # "grpo_cur_oracle",       # Privileged physical-state novelty diagnostic.
+    # "empg_g_only",           # Ablation: entropy gradient scaling only.
+    # "empg_f_only",           # Ablation: future-clarity bonus only.
+    # "empg_seek_uncertainty", # Sign-flipped clarity; exploratory diagnostic.
+]
+
 
 def launch_in_wsl(argv):
     root = PureWindowsPath(str(ROOT))
@@ -107,7 +124,8 @@ def main(argv=None):
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--tier", choices=tiers(), default="full")
-    ap.add_argument("--arms", nargs="+", choices=list(arms()), default=list(arms()))
+    ap.add_argument("--arms", nargs="+", choices=list(arms()),
+                    help="override the uncommented ENABLED_METHODS lines at the top of this file")
     ap.add_argument("--seeds", nargs="+", type=int, default=[0, 1, 2])
     ap.add_argument("--runs", help="run directory (default runs/<tier>)")
     ap.add_argument("--out", help="report directory (default results/<tier>)")
@@ -118,6 +136,13 @@ def main(argv=None):
     modes.add_argument("--report-only", action="store_true", help="regenerate tables from existing runs")
     ap.add_argument("overrides", nargs="*", help="shared dotted config overrides; precede with -- after --seeds/--arms")
     args = ap.parse_args(argv)
+    if args.arms is None:
+        args.arms = list(ENABLED_METHODS)
+    if not args.arms:
+        ap.error("no methods enabled; uncomment an ENABLED_METHODS line or pass --arms")
+    unknown = set(args.arms) - set(arms())
+    if unknown:
+        ap.error(f"unknown enabled methods: {', '.join(sorted(unknown))}")
     if len(set(args.seeds)) != len(args.seeds) or len(set(args.arms)) != len(args.arms):
         ap.error("arms and seeds must be unique")
     if any(o.split("=", 1)[0] in ("out_dir", "seed", "name", "eval.split") for o in args.overrides):
