@@ -13,11 +13,14 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import math
 import subprocess
 import sys
+import time
 
 from benchmarks.common import BASE, arms, load, tiers
 from benchmarks.evaluate import eval_path
+from benchmarks.process import run_process
 from empg.config import config_fingerprint
 
 # Named arm sets from docs/curiosity_research_plan.md.
@@ -28,11 +31,12 @@ PHASES = {
 }
 
 
-def run(module: str, config: str, tier, seed: int, overrides: list[str], *extra: str):
+def run(module: str, config: str, tier, seed: int, overrides: list[str], *extra: str, deadline=None):
     cmd = [sys.executable, "-m", module, "--config", str(config), "--seed", str(seed),
            *(["--tier", tier] if tier else []), *extra, *overrides]
     print("$", " ".join(cmd), flush=True)
-    subprocess.run(cmd, check=True)
+    timeout = max(0., deadline - time.monotonic()) if deadline is not None else None
+    run_process(cmd, timeout=timeout)
 
 
 def main():
@@ -42,17 +46,30 @@ def main():
     ap.add_argument("--tier", choices=tiers())
     ap.add_argument("--seeds", nargs="+", type=int, default=[0])
     ap.add_argument("--skip-base", action="store_true")
+    ap.add_argument("--max-seconds", type=float, default=0,
+                    help="wall-clock limit across training/evaluation; 0 disables it")
     ap.add_argument("overrides", nargs="*", help="dotted overrides applied to every run")
     args = ap.parse_args()
+    if not math.isfinite(args.max_seconds) or args.max_seconds < 0:
+        ap.error("--max-seconds must be finite and nonnegative")
     selected = args.arms or PHASES.get(args.phase) or PHASES["paper"]
     names = [load(arm, args.tier, args.overrides).name for arm in selected]
     if len(set(names)) != len(names):
         ap.error("selected arms resolve to the same run name; remove the shared name= override")
+    deadline = time.monotonic() + args.max_seconds if args.max_seconds else None
+    try:
+        run_suite(args, selected, deadline)
+    except subprocess.TimeoutExpired:
+        print("Suite deadline reached. Completed evaluations and training logs are preserved.", flush=True)
+        return 124
+    return 0
 
+
+def run_suite(args, selected, deadline=None):
     if not args.skip_base:
         cfg = load(BASE, args.tier, args.overrides)
         if not _matching_eval(eval_path(cfg, base=True), cfg):
-            run("benchmarks.evaluate", BASE, args.tier, 0, args.overrides, "--base")
+            run("benchmarks.evaluate", BASE, args.tier, 0, args.overrides, "--base", deadline=deadline)
 
     for seed in args.seeds:
         for arm in selected:
@@ -62,8 +79,8 @@ def main():
                 continue
             finished = _finished(cfg)  # validate config even if a partial run has no adapter
             if not (cfg.run_dir / "adapter").exists() or not finished:
-                run("benchmarks.train", arm, args.tier, seed, args.overrides)
-            run("benchmarks.evaluate", arm, args.tier, seed, args.overrides)
+                run("benchmarks.train", arm, args.tier, seed, args.overrides, deadline=deadline)
+            run("benchmarks.evaluate", arm, args.tier, seed, args.overrides, deadline=deadline)
 
 
 def _finished(cfg) -> bool:
@@ -74,6 +91,9 @@ def _finished(cfg) -> bool:
     completed = cfg.run_dir / "training_complete.json"
     if completed.exists():
         return json.loads(completed.read_text()).get("config_fingerprint") == config_fingerprint(cfg)
+    if cfg.train.max_seconds:
+        # A killed budgeted run can have all metric rows but an unfinished adapter save.
+        return False
     m = cfg.run_dir / "metrics.jsonl"
     return m.exists() and sum(1 for _ in m.open()) >= cfg.train.iterations
 
@@ -89,4 +109,4 @@ def _matching_eval(path, cfg):
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

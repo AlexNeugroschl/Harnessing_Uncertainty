@@ -1,0 +1,38 @@
+{
+  "grpo_cur_group vs grpo": {
+    "delta": -0.041666666666666664,
+    "ci95": [
+      -0.16666666666666666,
+      0.08333333333333333
+    ],
+    "degenerate": false,
+    "seeds": [
+      0
+    ],
+    "n_tasks": 24,
+    "discordant_seed_tasks": 3,
+    "seed_deltas": [
+      -0.041666666666666664
+    ],
+    "scope": "task variability only",
+    "note": "Exploratory percentile bootstrap; few seeds give uncertain intervals. Constant observed differences give a degenerate interval, not evidence of equivalence."
+  },
+  "empg_cur_episodic vs empg": {
+    "delta": 0.041666666666666664,
+    "ci95": [
+      0.0,
+      0.125
+    ],
+    "degenerate": false,
+    "seeds": [
+      0
+    ],
+    "n_tasks": 24,
+    "discordant_seed_tasks": 1,
+    "seed_deltas": [
+      0.041666666666666664
+    ],
+    "scope": "task variability only",
+    "note": "Exploratory percentile bootstrap; few seeds give uncertain intervals. Constant observed differences give a degenerate interval, not evidence of equivalence."
+  }
+}

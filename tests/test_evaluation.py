@@ -76,3 +76,15 @@ def test_suite_rejects_stale_eval_and_training(tmp_path):
     (cfg.run_dir / "config.json").write_text(json.dumps(old))
     with pytest.raises(ValueError, match="different configuration"):
         _finished(cfg)
+
+
+def test_budgeted_training_requires_completion_after_adapter_save(tmp_path):
+    cfg = load("grpo", "overnight")
+    cfg.out_dir = str(tmp_path)
+    cfg.run_dir.mkdir()
+    (cfg.run_dir / "adapter").mkdir()
+    (cfg.run_dir / "metrics.jsonl").write_text('{}\n' * cfg.train.iterations)
+    assert not _finished(cfg)
+    (cfg.run_dir / "training_complete.json").write_text(json.dumps({
+        "config_fingerprint": config_fingerprint(cfg), "reason": "max_seconds"}))
+    assert _finished(cfg)

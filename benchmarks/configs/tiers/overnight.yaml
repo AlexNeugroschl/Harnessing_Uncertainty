@@ -1,0 +1,15 @@
+# Development screen on one laptop. Same 50-turn horizon and response cap as full.
+# The runner uses seed 0 and an eight-hour suite deadline for this tier by default.
+out_dir: runs/overnight
+train:
+  iterations: 12          # may finish earlier at the time budget
+  games_per_iter: 1
+  group_size: 4          # retain sibling contrasts and group novelty
+  max_steps: 50
+  max_seconds: 2400      # 40 min rollout+update, checked after complete batches
+  save_every: 0          # save final adapter; avoid periodic checkpoint overhead
+eval:
+  split: valid_seen     # development; keep valid_unseen for later confirmation
+  max_tasks: 24
+  max_steps: 50
+  selection: stratified

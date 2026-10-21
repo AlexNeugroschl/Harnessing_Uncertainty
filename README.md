@@ -49,7 +49,7 @@ empg/                      the algorithm (benchmark-agnostic)
 benchmarks/
   configs/base.yaml        shared settings (the `reduced` run size)
   configs/arms/            one small file per method: grpo, empg, ablations, curiosity arms
-  configs/tiers/           smoke, small, pilot, reduced, full (50 turns + entire unseen split)
+  configs/tiers/           smoke, small, pilot, overnight, reduced, full
   train.py  evaluate.py    train one arm / evaluate per ALFWorld subtask
   suite.py  report.py      arms × seeds → paper-style tables, exploration table, curves
   explore_stats.py         curiosity plan Phase 0: exploration behaviour without training
@@ -82,8 +82,49 @@ For training, evaluation **and comparison tables in one command**, run the root 
 
 ```bash
 python run_benchmarks.py --estimate-only   # preview the remaining workload without loading a model
-python run_benchmarks.py                   # enabled methods × seeds 0,1,2 + untrained base
+python run_benchmarks.py                   # overnight: enabled methods × seed 0 + untrained base
 ```
+
+The default is now an **overnight development screen**, estimated at **2.3–6.8 hours**
+(central estimate 4.5 hours) on the profiled RTX 5060 Laptop 8GB:
+
+| Setting | Overnight | Full confirmation budget |
+|---|---|---|
+| Training seeds | 0 | 0, 1, 2 |
+| Training batch | 1 task × 4 siblings | 2 tasks × 8 siblings |
+| Training iterations | Up to 12 | 40 |
+| Training time per method | 40 minutes, checked after a complete batch | Iteration budget |
+| Train / eval horizon | 50 / 50 turns | 50 / 50 turns |
+| Response cap | 256 tokens | 256 tokens |
+| Evaluation panel | Same stratified 24 `valid_seen` tasks | All 134 `valid_unseen` tasks |
+| Suite deadline | 8 hours, followed by cleanup/reporting | Unlimited by default |
+
+This preserves the long episodes and response length while reducing repetitions, sibling
+count and evaluation breadth. The time cap can produce different update counts and task-prefix
+lengths across methods: this screens learning under a compute budget. Use the recorded steps,
+tokens and time when comparing it, rather than assuming equal training data. It can reveal
+useful exploration changes, task-success gains or obvious failures; one seed and 24 tasks
+cannot establish a reliable winner or rule out an effect when all methods fail.
+
+`--hours` bounds the entire training/evaluation suite, including phase startup, not just
+training updates. At the deadline it terminates the active Linux phase and its environment
+workers, preserves completed evaluations/logs, generates partial tables, and exits with code
+124. An unfinished evaluation is shown as missing, never as zero success. Cleanup and reports
+take additional time. A training time cap is softer: the current rollout/update finishes before
+saving the adapter. None of these runtime estimates is a measured timing interval.
+
+```bash
+python run_benchmarks.py --hours 8              # default overnight screen
+python run_benchmarks.py --report-only          # regenerate overnight tables
+python run_benchmarks.py --tier full            # opt into the much longer, three-seed benchmark
+```
+
+For a shorter night, select one controlled pair, e.g.
+`--arms grpo grpo_cur_group --hours 6`. Changing `--hours` alone changes the suite stop time;
+it does not redistribute the per-method training budget. Uncommenting more methods or adding
+seeds increases work and can leave later methods incomplete at the deadline. If a previous
+full run is still running, stop its terminal command with Ctrl+C before starting another GPU
+job; editing the preset does not change an already-running process.
 
 The `ENABLED_METHODS` list near the top of `run_benchmarks.py` lists all ten methods on
 separate lines. Comment out a line to disable its run; uncomment it to enable it.
@@ -107,7 +148,7 @@ The `full` tier retains the laptop-sized LoRA setup, with 40 training iterations
 2 tasks × 8 sibling episodes, 50-turn training/evaluation horizons, and all 134
 `valid_unseen` evaluation tasks. It is a full **local** comparison, not a replication of the
 paper's larger training budget. On this RTX 5060 Laptop 8GB, a rough extrapolation from the
-local profiles is **about 4–12 days for the default four methods × three seeds**, with a
+local profiles is **about 4–12 days for four methods × three seeds at `--tier full`**, with a
 full-horizon estimate around 7.7 days. Uncommenting all ten methods increases that to
 **9.5–28.6 days for 30 trained runs**, with a full-horizon estimate of 19.1 days.
 Short profile measurements do not capture long-context costs; this is a workload
@@ -133,10 +174,12 @@ Results go to `runs/<tier>/` and reports to `results/<tier>/`. The runner genera
 - `comparison.md`: all methods, per-subtask success, seed variability, paired differences and individual runs.
 - `runs.md` / `runs.csv`: one row per seed, including success, task count, training steps and measured training time.
 - Exploration and response-length tables, paired comparison JSON, and training curves by iteration, steps, tokens and time.
+- `curiosity_comparisons.md` / `.json`: each curiosity variant against its matching GRPO or EMPG baseline.
 - `benchmark_run.json`: resolved configurations, estimated remaining work, status and observed suite elapsed time.
 
 Re-run the same command to skip completed training/evaluation. An interrupted training run
-restarts training; it does not resume optimizer state. The runner validates existing
+restarts training; it does not resume optimizer state. `runs.csv` records whether each method
+stopped at its iteration/time budget or remained incomplete. The runner validates existing
 configurations before starting new work and attempts partial reports when a later run fails.
 Use `--report-only` to regenerate tables, or `--runs` and `--out` to keep an experiment separate.
 Paths are relative to this repository, or absolute Linux paths when running through WSL.

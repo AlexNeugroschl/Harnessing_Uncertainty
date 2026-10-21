@@ -1,0 +1,1072 @@
+{
+  "base": [
+    {
+      "Clean": 0.2,
+      "Cool": 0.0,
+      "Heat": 0.0,
+      "Look": 0.0,
+      "Pick": 0.0,
+      "Pick2": 0.0,
+      "all": 0.041666666666666664,
+      "n": {
+        "Look": 2,
+        "Pick": 6,
+        "Clean": 5,
+        "Cool": 4,
+        "Heat": 3,
+        "Pick2": 4
+      },
+      "resp_len": {
+        "n": 1160,
+        "mean": 86.51551724137931,
+        "max": 256,
+        "p50": 75.5,
+        "p90": 119.0,
+        "p99": 256.0,
+        "p99.9": 256.0,
+        "trunc_rate": 0.03017241379310345,
+        "trunc_invalid": 1.0,
+        "cap": 256
+      },
+      "seed": 0,
+      "per_task": [
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/look_at_obj_in_light-Laptop-None-DeskLamp-328/trial_T20190908_201550_622420/game.tw-pddl",
+          "type": "Look",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/look_at_obj_in_light-Pillow-None-DeskLamp-302/trial_T20190909_150916_682139/game.tw-pddl",
+          "type": "Look",
+          "won": false,
+          "steps": 50,
+          "invalid": 3
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-Book-None-Sofa-229/trial_T20190907_042856_259139/game.tw-pddl",
+          "type": "Pick",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-Egg-None-Microwave-4/trial_T20190906_234406_356490/game.tw-pddl",
+          "type": "Pick",
+          "won": false,
+          "steps": 50,
+          "invalid": 2
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-Pencil-None-Desk-310/trial_T20190909_113054_894334/game.tw-pddl",
+          "type": "Pick",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-SprayBottle-None-GarbageCan-409/trial_T20190908_054742_818364/game.tw-pddl",
+          "type": "Pick",
+          "won": false,
+          "steps": 50,
+          "invalid": 3
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-SprayBottle-None-Toilet-415/trial_T20190909_075955_678702/game.tw-pddl",
+          "type": "Pick",
+          "won": false,
+          "steps": 50,
+          "invalid": 3
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-Watch-None-SideTable-222/trial_T20190909_051813_197569/game.tw-pddl",
+          "type": "Pick",
+          "won": false,
+          "steps": 50,
+          "invalid": 1
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_clean_then_place_in_recep-DishSponge-None-Cart-401/trial_T20190907_024634_972453/game.tw-pddl",
+          "type": "Clean",
+          "won": false,
+          "steps": 50,
+          "invalid": 1
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_clean_then_place_in_recep-DishSponge-None-CounterTop-403/trial_T20190908_144357_621068/game.tw-pddl",
+          "type": "Clean",
+          "won": false,
+          "steps": 50,
+          "invalid": 1
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_clean_then_place_in_recep-Ladle-None-CounterTop-8/trial_T20190909_121908_219603/game.tw-pddl",
+          "type": "Clean",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_clean_then_place_in_recep-Ladle-None-DiningTable-4/trial_T20190909_164840_568811/game.tw-pddl",
+          "type": "Clean",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_clean_then_place_in_recep-Plate-None-CounterTop-19/trial_T20190908_212725_836398/game.tw-pddl",
+          "type": "Clean",
+          "won": true,
+          "steps": 10,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_cool_then_place_in_recep-Pan-None-DiningTable-7/trial_T20190908_232648_241836/game.tw-pddl",
+          "type": "Cool",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_cool_then_place_in_recep-Pan-None-StoveBurner-23/trial_T20190906_215856_374127/game.tw-pddl",
+          "type": "Cool",
+          "won": false,
+          "steps": 50,
+          "invalid": 5
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_cool_then_place_in_recep-Plate-None-CounterTop-1/trial_T20190906_205324_559361/game.tw-pddl",
+          "type": "Cool",
+          "won": false,
+          "steps": 50,
+          "invalid": 5
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_cool_then_place_in_recep-Tomato-None-GarbageCan-6/trial_T20190909_082934_483899/game.tw-pddl",
+          "type": "Cool",
+          "won": false,
+          "steps": 50,
+          "invalid": 1
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_heat_then_place_in_recep-Plate-None-Cabinet-1/trial_T20190908_070946_578973/game.tw-pddl",
+          "type": "Heat",
+          "won": false,
+          "steps": 50,
+          "invalid": 4
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_heat_then_place_in_recep-Tomato-None-Fridge-23/trial_T20190909_082320_103350/game.tw-pddl",
+          "type": "Heat",
+          "won": false,
+          "steps": 50,
+          "invalid": 3
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_heat_then_place_in_recep-Tomato-None-Fridge-24/trial_T20190908_033721_967359/game.tw-pddl",
+          "type": "Heat",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_two_obj_and_place-Book-None-Desk-302/trial_T20190906_181233_363875/game.tw-pddl",
+          "type": "Pick2",
+          "won": false,
+          "steps": 50,
+          "invalid": 1
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_two_obj_and_place-CreditCard-None-Safe-323/trial_T20190907_001129_214240/game.tw-pddl",
+          "type": "Pick2",
+          "won": false,
+          "steps": 50,
+          "invalid": 2
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_two_obj_and_place-RemoteControl-None-Ottoman-203/trial_T20190906_182952_858723/game.tw-pddl",
+          "type": "Pick2",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_two_obj_and_place-Watch-None-Dresser-205/trial_T20190907_182211_592010/game.tw-pddl",
+          "type": "Pick2",
+          "won": false,
+          "steps": 50,
+          "invalid": 1
+        }
+      ],
+      "config_fingerprint": "57ecbf002d65efa37b838ebb8f40ccb20d270131f47e47b02e2adccb9fc60058",
+      "protocol": {
+        "split": "valid_seen",
+        "max_steps": 50,
+        "greedy": true,
+        "backend": "hf",
+        "model": "Qwen/Qwen2.5-1.5B-Instruct",
+        "max_new_tokens": 256,
+        "selection": "stratified",
+        "selection_seed": 0,
+        "history_length": 2
+      }
+    }
+  ],
+  "empg_cur_episodic": [
+    {
+      "Clean": 0.2,
+      "Cool": 0.0,
+      "Heat": 0.0,
+      "Look": 0.0,
+      "Pick": 0.0,
+      "Pick2": 0.0,
+      "all": 0.041666666666666664,
+      "n": {
+        "Look": 2,
+        "Pick": 6,
+        "Clean": 5,
+        "Cool": 4,
+        "Heat": 3,
+        "Pick2": 4
+      },
+      "resp_len": {
+        "n": 1173,
+        "mean": 93.8380221653879,
+        "max": 256,
+        "p50": 80.0,
+        "p90": 142.5999999999999,
+        "p99": 256.0,
+        "p99.9": 256.0,
+        "trunc_rate": 0.03836317135549872,
+        "trunc_invalid": 1.0,
+        "cap": 256
+      },
+      "seed": 0,
+      "per_task": [
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/look_at_obj_in_light-Laptop-None-DeskLamp-328/trial_T20190908_201550_622420/game.tw-pddl",
+          "type": "Look",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/look_at_obj_in_light-Pillow-None-DeskLamp-302/trial_T20190909_150916_682139/game.tw-pddl",
+          "type": "Look",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-Book-None-Sofa-229/trial_T20190907_042856_259139/game.tw-pddl",
+          "type": "Pick",
+          "won": false,
+          "steps": 50,
+          "invalid": 3
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-Egg-None-Microwave-4/trial_T20190906_234406_356490/game.tw-pddl",
+          "type": "Pick",
+          "won": false,
+          "steps": 50,
+          "invalid": 4
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-Pencil-None-Desk-310/trial_T20190909_113054_894334/game.tw-pddl",
+          "type": "Pick",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-SprayBottle-None-GarbageCan-409/trial_T20190908_054742_818364/game.tw-pddl",
+          "type": "Pick",
+          "won": false,
+          "steps": 50,
+          "invalid": 3
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-SprayBottle-None-Toilet-415/trial_T20190909_075955_678702/game.tw-pddl",
+          "type": "Pick",
+          "won": false,
+          "steps": 50,
+          "invalid": 2
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-Watch-None-SideTable-222/trial_T20190909_051813_197569/game.tw-pddl",
+          "type": "Pick",
+          "won": false,
+          "steps": 50,
+          "invalid": 1
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_clean_then_place_in_recep-DishSponge-None-Cart-401/trial_T20190907_024634_972453/game.tw-pddl",
+          "type": "Clean",
+          "won": false,
+          "steps": 50,
+          "invalid": 4
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_clean_then_place_in_recep-DishSponge-None-CounterTop-403/trial_T20190908_144357_621068/game.tw-pddl",
+          "type": "Clean",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_clean_then_place_in_recep-Ladle-None-CounterTop-8/trial_T20190909_121908_219603/game.tw-pddl",
+          "type": "Clean",
+          "won": false,
+          "steps": 50,
+          "invalid": 3
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_clean_then_place_in_recep-Ladle-None-DiningTable-4/trial_T20190909_164840_568811/game.tw-pddl",
+          "type": "Clean",
+          "won": true,
+          "steps": 23,
+          "invalid": 1
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_clean_then_place_in_recep-Plate-None-CounterTop-19/trial_T20190908_212725_836398/game.tw-pddl",
+          "type": "Clean",
+          "won": false,
+          "steps": 50,
+          "invalid": 1
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_cool_then_place_in_recep-Pan-None-DiningTable-7/trial_T20190908_232648_241836/game.tw-pddl",
+          "type": "Cool",
+          "won": false,
+          "steps": 50,
+          "invalid": 4
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_cool_then_place_in_recep-Pan-None-StoveBurner-23/trial_T20190906_215856_374127/game.tw-pddl",
+          "type": "Cool",
+          "won": false,
+          "steps": 50,
+          "invalid": 2
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_cool_then_place_in_recep-Plate-None-CounterTop-1/trial_T20190906_205324_559361/game.tw-pddl",
+          "type": "Cool",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_cool_then_place_in_recep-Tomato-None-GarbageCan-6/trial_T20190909_082934_483899/game.tw-pddl",
+          "type": "Cool",
+          "won": false,
+          "steps": 50,
+          "invalid": 2
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_heat_then_place_in_recep-Plate-None-Cabinet-1/trial_T20190908_070946_578973/game.tw-pddl",
+          "type": "Heat",
+          "won": false,
+          "steps": 50,
+          "invalid": 4
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_heat_then_place_in_recep-Tomato-None-Fridge-23/trial_T20190909_082320_103350/game.tw-pddl",
+          "type": "Heat",
+          "won": false,
+          "steps": 50,
+          "invalid": 5
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_heat_then_place_in_recep-Tomato-None-Fridge-24/trial_T20190908_033721_967359/game.tw-pddl",
+          "type": "Heat",
+          "won": false,
+          "steps": 50,
+          "invalid": 1
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_two_obj_and_place-Book-None-Desk-302/trial_T20190906_181233_363875/game.tw-pddl",
+          "type": "Pick2",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_two_obj_and_place-CreditCard-None-Safe-323/trial_T20190907_001129_214240/game.tw-pddl",
+          "type": "Pick2",
+          "won": false,
+          "steps": 50,
+          "invalid": 2
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_two_obj_and_place-RemoteControl-None-Ottoman-203/trial_T20190906_182952_858723/game.tw-pddl",
+          "type": "Pick2",
+          "won": false,
+          "steps": 50,
+          "invalid": 3
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_two_obj_and_place-Watch-None-Dresser-205/trial_T20190907_182211_592010/game.tw-pddl",
+          "type": "Pick2",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        }
+      ],
+      "config_fingerprint": "f310785a4466e4b48eec53e101938da47ba55c33544bdda27497bcbc7b0a6a7f",
+      "protocol": {
+        "split": "valid_seen",
+        "max_steps": 50,
+        "greedy": true,
+        "backend": "hf",
+        "model": "Qwen/Qwen2.5-1.5B-Instruct",
+        "max_new_tokens": 256,
+        "selection": "stratified",
+        "selection_seed": 0,
+        "history_length": 2
+      }
+    }
+  ],
+  "empg": [
+    {
+      "Clean": 0.0,
+      "Cool": 0.0,
+      "Heat": 0.0,
+      "Look": 0.0,
+      "Pick": 0.0,
+      "Pick2": 0.0,
+      "all": 0.0,
+      "n": {
+        "Look": 2,
+        "Pick": 6,
+        "Clean": 5,
+        "Cool": 4,
+        "Heat": 3,
+        "Pick2": 4
+      },
+      "resp_len": {
+        "n": 1200,
+        "mean": 90.50416666666666,
+        "max": 256,
+        "p50": 78.0,
+        "p90": 131.0,
+        "p99": 256.0,
+        "p99.9": 256.0,
+        "trunc_rate": 0.025,
+        "trunc_invalid": 1.0,
+        "cap": 256
+      },
+      "seed": 0,
+      "per_task": [
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/look_at_obj_in_light-Laptop-None-DeskLamp-328/trial_T20190908_201550_622420/game.tw-pddl",
+          "type": "Look",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/look_at_obj_in_light-Pillow-None-DeskLamp-302/trial_T20190909_150916_682139/game.tw-pddl",
+          "type": "Look",
+          "won": false,
+          "steps": 50,
+          "invalid": 1
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-Book-None-Sofa-229/trial_T20190907_042856_259139/game.tw-pddl",
+          "type": "Pick",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-Egg-None-Microwave-4/trial_T20190906_234406_356490/game.tw-pddl",
+          "type": "Pick",
+          "won": false,
+          "steps": 50,
+          "invalid": 7
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-Pencil-None-Desk-310/trial_T20190909_113054_894334/game.tw-pddl",
+          "type": "Pick",
+          "won": false,
+          "steps": 50,
+          "invalid": 1
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-SprayBottle-None-GarbageCan-409/trial_T20190908_054742_818364/game.tw-pddl",
+          "type": "Pick",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-SprayBottle-None-Toilet-415/trial_T20190909_075955_678702/game.tw-pddl",
+          "type": "Pick",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-Watch-None-SideTable-222/trial_T20190909_051813_197569/game.tw-pddl",
+          "type": "Pick",
+          "won": false,
+          "steps": 50,
+          "invalid": 3
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_clean_then_place_in_recep-DishSponge-None-Cart-401/trial_T20190907_024634_972453/game.tw-pddl",
+          "type": "Clean",
+          "won": false,
+          "steps": 50,
+          "invalid": 1
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_clean_then_place_in_recep-DishSponge-None-CounterTop-403/trial_T20190908_144357_621068/game.tw-pddl",
+          "type": "Clean",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_clean_then_place_in_recep-Ladle-None-CounterTop-8/trial_T20190909_121908_219603/game.tw-pddl",
+          "type": "Clean",
+          "won": false,
+          "steps": 50,
+          "invalid": 2
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_clean_then_place_in_recep-Ladle-None-DiningTable-4/trial_T20190909_164840_568811/game.tw-pddl",
+          "type": "Clean",
+          "won": false,
+          "steps": 50,
+          "invalid": 1
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_clean_then_place_in_recep-Plate-None-CounterTop-19/trial_T20190908_212725_836398/game.tw-pddl",
+          "type": "Clean",
+          "won": false,
+          "steps": 50,
+          "invalid": 1
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_cool_then_place_in_recep-Pan-None-DiningTable-7/trial_T20190908_232648_241836/game.tw-pddl",
+          "type": "Cool",
+          "won": false,
+          "steps": 50,
+          "invalid": 1
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_cool_then_place_in_recep-Pan-None-StoveBurner-23/trial_T20190906_215856_374127/game.tw-pddl",
+          "type": "Cool",
+          "won": false,
+          "steps": 50,
+          "invalid": 1
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_cool_then_place_in_recep-Plate-None-CounterTop-1/trial_T20190906_205324_559361/game.tw-pddl",
+          "type": "Cool",
+          "won": false,
+          "steps": 50,
+          "invalid": 3
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_cool_then_place_in_recep-Tomato-None-GarbageCan-6/trial_T20190909_082934_483899/game.tw-pddl",
+          "type": "Cool",
+          "won": false,
+          "steps": 50,
+          "invalid": 1
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_heat_then_place_in_recep-Plate-None-Cabinet-1/trial_T20190908_070946_578973/game.tw-pddl",
+          "type": "Heat",
+          "won": false,
+          "steps": 50,
+          "invalid": 1
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_heat_then_place_in_recep-Tomato-None-Fridge-23/trial_T20190909_082320_103350/game.tw-pddl",
+          "type": "Heat",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_heat_then_place_in_recep-Tomato-None-Fridge-24/trial_T20190908_033721_967359/game.tw-pddl",
+          "type": "Heat",
+          "won": false,
+          "steps": 50,
+          "invalid": 2
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_two_obj_and_place-Book-None-Desk-302/trial_T20190906_181233_363875/game.tw-pddl",
+          "type": "Pick2",
+          "won": false,
+          "steps": 50,
+          "invalid": 2
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_two_obj_and_place-CreditCard-None-Safe-323/trial_T20190907_001129_214240/game.tw-pddl",
+          "type": "Pick2",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_two_obj_and_place-RemoteControl-None-Ottoman-203/trial_T20190906_182952_858723/game.tw-pddl",
+          "type": "Pick2",
+          "won": false,
+          "steps": 50,
+          "invalid": 1
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_two_obj_and_place-Watch-None-Dresser-205/trial_T20190907_182211_592010/game.tw-pddl",
+          "type": "Pick2",
+          "won": false,
+          "steps": 50,
+          "invalid": 1
+        }
+      ],
+      "config_fingerprint": "834cb1e69fc54b7cb1299c2213bd51440f7348cb2e8a3524bbaad45b9e1c0470",
+      "protocol": {
+        "split": "valid_seen",
+        "max_steps": 50,
+        "greedy": true,
+        "backend": "hf",
+        "model": "Qwen/Qwen2.5-1.5B-Instruct",
+        "max_new_tokens": 256,
+        "selection": "stratified",
+        "selection_seed": 0,
+        "history_length": 2
+      }
+    }
+  ],
+  "grpo_cur_group": [
+    {
+      "Clean": 0.2,
+      "Cool": 0.0,
+      "Heat": 0.0,
+      "Look": 0.0,
+      "Pick": 0.0,
+      "Pick2": 0.0,
+      "all": 0.041666666666666664,
+      "n": {
+        "Look": 2,
+        "Pick": 6,
+        "Clean": 5,
+        "Cool": 4,
+        "Heat": 3,
+        "Pick2": 4
+      },
+      "resp_len": {
+        "n": 1160,
+        "mean": 93.47413793103448,
+        "max": 256,
+        "p50": 79.0,
+        "p90": 146.20000000000027,
+        "p99": 256.0,
+        "p99.9": 256.0,
+        "trunc_rate": 0.03879310344827586,
+        "trunc_invalid": 1.0,
+        "cap": 256
+      },
+      "seed": 0,
+      "per_task": [
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/look_at_obj_in_light-Laptop-None-DeskLamp-328/trial_T20190908_201550_622420/game.tw-pddl",
+          "type": "Look",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/look_at_obj_in_light-Pillow-None-DeskLamp-302/trial_T20190909_150916_682139/game.tw-pddl",
+          "type": "Look",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-Book-None-Sofa-229/trial_T20190907_042856_259139/game.tw-pddl",
+          "type": "Pick",
+          "won": false,
+          "steps": 50,
+          "invalid": 1
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-Egg-None-Microwave-4/trial_T20190906_234406_356490/game.tw-pddl",
+          "type": "Pick",
+          "won": false,
+          "steps": 50,
+          "invalid": 6
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-Pencil-None-Desk-310/trial_T20190909_113054_894334/game.tw-pddl",
+          "type": "Pick",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-SprayBottle-None-GarbageCan-409/trial_T20190908_054742_818364/game.tw-pddl",
+          "type": "Pick",
+          "won": false,
+          "steps": 50,
+          "invalid": 1
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-SprayBottle-None-Toilet-415/trial_T20190909_075955_678702/game.tw-pddl",
+          "type": "Pick",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-Watch-None-SideTable-222/trial_T20190909_051813_197569/game.tw-pddl",
+          "type": "Pick",
+          "won": false,
+          "steps": 50,
+          "invalid": 4
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_clean_then_place_in_recep-DishSponge-None-Cart-401/trial_T20190907_024634_972453/game.tw-pddl",
+          "type": "Clean",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_clean_then_place_in_recep-DishSponge-None-CounterTop-403/trial_T20190908_144357_621068/game.tw-pddl",
+          "type": "Clean",
+          "won": false,
+          "steps": 50,
+          "invalid": 2
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_clean_then_place_in_recep-Ladle-None-CounterTop-8/trial_T20190909_121908_219603/game.tw-pddl",
+          "type": "Clean",
+          "won": false,
+          "steps": 50,
+          "invalid": 3
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_clean_then_place_in_recep-Ladle-None-DiningTable-4/trial_T20190909_164840_568811/game.tw-pddl",
+          "type": "Clean",
+          "won": false,
+          "steps": 50,
+          "invalid": 2
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_clean_then_place_in_recep-Plate-None-CounterTop-19/trial_T20190908_212725_836398/game.tw-pddl",
+          "type": "Clean",
+          "won": true,
+          "steps": 10,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_cool_then_place_in_recep-Pan-None-DiningTable-7/trial_T20190908_232648_241836/game.tw-pddl",
+          "type": "Cool",
+          "won": false,
+          "steps": 50,
+          "invalid": 3
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_cool_then_place_in_recep-Pan-None-StoveBurner-23/trial_T20190906_215856_374127/game.tw-pddl",
+          "type": "Cool",
+          "won": false,
+          "steps": 50,
+          "invalid": 6
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_cool_then_place_in_recep-Plate-None-CounterTop-1/trial_T20190906_205324_559361/game.tw-pddl",
+          "type": "Cool",
+          "won": false,
+          "steps": 50,
+          "invalid": 3
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_cool_then_place_in_recep-Tomato-None-GarbageCan-6/trial_T20190909_082934_483899/game.tw-pddl",
+          "type": "Cool",
+          "won": false,
+          "steps": 50,
+          "invalid": 5
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_heat_then_place_in_recep-Plate-None-Cabinet-1/trial_T20190908_070946_578973/game.tw-pddl",
+          "type": "Heat",
+          "won": false,
+          "steps": 50,
+          "invalid": 4
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_heat_then_place_in_recep-Tomato-None-Fridge-23/trial_T20190909_082320_103350/game.tw-pddl",
+          "type": "Heat",
+          "won": false,
+          "steps": 50,
+          "invalid": 1
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_heat_then_place_in_recep-Tomato-None-Fridge-24/trial_T20190908_033721_967359/game.tw-pddl",
+          "type": "Heat",
+          "won": false,
+          "steps": 50,
+          "invalid": 1
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_two_obj_and_place-Book-None-Desk-302/trial_T20190906_181233_363875/game.tw-pddl",
+          "type": "Pick2",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_two_obj_and_place-CreditCard-None-Safe-323/trial_T20190907_001129_214240/game.tw-pddl",
+          "type": "Pick2",
+          "won": false,
+          "steps": 50,
+          "invalid": 2
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_two_obj_and_place-RemoteControl-None-Ottoman-203/trial_T20190906_182952_858723/game.tw-pddl",
+          "type": "Pick2",
+          "won": false,
+          "steps": 50,
+          "invalid": 2
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_two_obj_and_place-Watch-None-Dresser-205/trial_T20190907_182211_592010/game.tw-pddl",
+          "type": "Pick2",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        }
+      ],
+      "config_fingerprint": "cd5b1668b24b0ee2ccc2332cd4a847207fe83e0c967c4d57ad168299a1429c45",
+      "protocol": {
+        "split": "valid_seen",
+        "max_steps": 50,
+        "greedy": true,
+        "backend": "hf",
+        "model": "Qwen/Qwen2.5-1.5B-Instruct",
+        "max_new_tokens": 256,
+        "selection": "stratified",
+        "selection_seed": 0,
+        "history_length": 2
+      }
+    }
+  ],
+  "grpo": [
+    {
+      "Clean": 0.2,
+      "Cool": 0.0,
+      "Heat": 0.0,
+      "Look": 0.0,
+      "Pick": 0.16666666666666666,
+      "Pick2": 0.0,
+      "all": 0.08333333333333333,
+      "n": {
+        "Look": 2,
+        "Pick": 6,
+        "Clean": 5,
+        "Cool": 4,
+        "Heat": 3,
+        "Pick2": 4
+      },
+      "resp_len": {
+        "n": 1133,
+        "mean": 88.39894086496028,
+        "max": 256,
+        "p50": 77.0,
+        "p90": 119.80000000000007,
+        "p99": 256.0,
+        "p99.9": 256.0,
+        "trunc_rate": 0.03177405119152692,
+        "trunc_invalid": 0.9722222222222222,
+        "cap": 256
+      },
+      "seed": 0,
+      "per_task": [
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/look_at_obj_in_light-Laptop-None-DeskLamp-328/trial_T20190908_201550_622420/game.tw-pddl",
+          "type": "Look",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/look_at_obj_in_light-Pillow-None-DeskLamp-302/trial_T20190909_150916_682139/game.tw-pddl",
+          "type": "Look",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-Book-None-Sofa-229/trial_T20190907_042856_259139/game.tw-pddl",
+          "type": "Pick",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-Egg-None-Microwave-4/trial_T20190906_234406_356490/game.tw-pddl",
+          "type": "Pick",
+          "won": false,
+          "steps": 50,
+          "invalid": 1
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-Pencil-None-Desk-310/trial_T20190909_113054_894334/game.tw-pddl",
+          "type": "Pick",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-SprayBottle-None-GarbageCan-409/trial_T20190908_054742_818364/game.tw-pddl",
+          "type": "Pick",
+          "won": false,
+          "steps": 50,
+          "invalid": 1
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-SprayBottle-None-Toilet-415/trial_T20190909_075955_678702/game.tw-pddl",
+          "type": "Pick",
+          "won": true,
+          "steps": 20,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_and_place_simple-Watch-None-SideTable-222/trial_T20190909_051813_197569/game.tw-pddl",
+          "type": "Pick",
+          "won": false,
+          "steps": 50,
+          "invalid": 2
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_clean_then_place_in_recep-DishSponge-None-Cart-401/trial_T20190907_024634_972453/game.tw-pddl",
+          "type": "Clean",
+          "won": false,
+          "steps": 50,
+          "invalid": 1
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_clean_then_place_in_recep-DishSponge-None-CounterTop-403/trial_T20190908_144357_621068/game.tw-pddl",
+          "type": "Clean",
+          "won": false,
+          "steps": 50,
+          "invalid": 2
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_clean_then_place_in_recep-Ladle-None-CounterTop-8/trial_T20190909_121908_219603/game.tw-pddl",
+          "type": "Clean",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_clean_then_place_in_recep-Ladle-None-DiningTable-4/trial_T20190909_164840_568811/game.tw-pddl",
+          "type": "Clean",
+          "won": true,
+          "steps": 13,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_clean_then_place_in_recep-Plate-None-CounterTop-19/trial_T20190908_212725_836398/game.tw-pddl",
+          "type": "Clean",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_cool_then_place_in_recep-Pan-None-DiningTable-7/trial_T20190908_232648_241836/game.tw-pddl",
+          "type": "Cool",
+          "won": false,
+          "steps": 50,
+          "invalid": 5
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_cool_then_place_in_recep-Pan-None-StoveBurner-23/trial_T20190906_215856_374127/game.tw-pddl",
+          "type": "Cool",
+          "won": false,
+          "steps": 50,
+          "invalid": 3
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_cool_then_place_in_recep-Plate-None-CounterTop-1/trial_T20190906_205324_559361/game.tw-pddl",
+          "type": "Cool",
+          "won": false,
+          "steps": 50,
+          "invalid": 2
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_cool_then_place_in_recep-Tomato-None-GarbageCan-6/trial_T20190909_082934_483899/game.tw-pddl",
+          "type": "Cool",
+          "won": false,
+          "steps": 50,
+          "invalid": 3
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_heat_then_place_in_recep-Plate-None-Cabinet-1/trial_T20190908_070946_578973/game.tw-pddl",
+          "type": "Heat",
+          "won": false,
+          "steps": 50,
+          "invalid": 6
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_heat_then_place_in_recep-Tomato-None-Fridge-23/trial_T20190909_082320_103350/game.tw-pddl",
+          "type": "Heat",
+          "won": false,
+          "steps": 50,
+          "invalid": 3
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_heat_then_place_in_recep-Tomato-None-Fridge-24/trial_T20190908_033721_967359/game.tw-pddl",
+          "type": "Heat",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_two_obj_and_place-Book-None-Desk-302/trial_T20190906_181233_363875/game.tw-pddl",
+          "type": "Pick2",
+          "won": false,
+          "steps": 50,
+          "invalid": 0
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_two_obj_and_place-CreditCard-None-Safe-323/trial_T20190907_001129_214240/game.tw-pddl",
+          "type": "Pick2",
+          "won": false,
+          "steps": 50,
+          "invalid": 2
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_two_obj_and_place-RemoteControl-None-Ottoman-203/trial_T20190906_182952_858723/game.tw-pddl",
+          "type": "Pick2",
+          "won": false,
+          "steps": 50,
+          "invalid": 3
+        },
+        {
+          "task": "/home/alex_neugroschl/.cache/alfworld/json_2.1.1/valid_seen/pick_two_obj_and_place-Watch-None-Dresser-205/trial_T20190907_182211_592010/game.tw-pddl",
+          "type": "Pick2",
+          "won": false,
+          "steps": 50,
+          "invalid": 1
+        }
+      ],
+      "config_fingerprint": "1a7b16d334fb6eac7dcad971aa6593b527269196ef1cc352ec2223398435c9dc",
+      "protocol": {
+        "split": "valid_seen",
+        "max_steps": 50,
+        "greedy": true,
+        "backend": "hf",
+        "model": "Qwen/Qwen2.5-1.5B-Instruct",
+        "max_new_tokens": 256,
+        "selection": "stratified",
+        "selection_seed": 0,
+        "history_length": 2
+      }
+    }
+  ]
+}

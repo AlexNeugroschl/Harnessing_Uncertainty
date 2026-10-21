@@ -63,6 +63,25 @@ def run_dirs(runs: Path, seeds=None):
         yield d, arm if separator else d.name
 
 
+def read_jsonl(path: Path):
+    """A deadline can interrupt the last write; retain earlier complete records."""
+    if not path.exists():
+        return []
+    lines = path.read_text().splitlines(keepends=True)
+    records = []
+    for i, line in enumerate(lines):
+        if not line.strip():
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            if i == len(lines) - 1 and not line.endswith("\n"):
+                print(f"Ignoring interrupted final record in {path}")
+                break
+            raise
+    return records
+
+
 def load(runs: Path, split: str, seeds=None):
     evals, curves = defaultdict(list), defaultdict(list)
     for d, arm in run_dirs(runs, seeds):
@@ -71,7 +90,7 @@ def load(runs: Path, split: str, seeds=None):
             evals[arm].append(json.loads(e.read_text()))
         m = d / "metrics.jsonl"
         if m.exists():
-            curves[arm].append([json.loads(line) for line in m.open()])
+            curves[arm].append(read_jsonl(m))
     return evals, curves
 
 
@@ -224,7 +243,7 @@ def load_lengths(runs: Path, split: str, seeds=None) -> dict:
     for d, arm in run_dirs(runs, seeds):
         t = d / "resp_lengths_train.jsonl"
         if t.exists():
-            recs = [json.loads(line) for line in t.open()]
+            recs = read_jsonl(t)
             for rec in recs:
                 add(arm, "train", rec)
             for rec in recs[-5:]:
@@ -261,10 +280,12 @@ def write_run_comparison(runs: Path, split: str, out: Path, arms=None, seeds=Non
         evaluation = d / f"eval_{split}.json"
         metrics = d / "metrics.jsonl"
         ev = json.loads(evaluation.read_text()) if evaluation.exists() else {}
-        records = [json.loads(line) for line in metrics.read_text().splitlines() if line.strip()] if metrics.exists() else []
+        records = read_jsonl(metrics)
         if not ev and not records:
             continue
         last = records[-1] if records else {}
+        completed = d / "training_complete.json"
+        stop = json.loads(completed.read_text()).get("reason", "unknown") if completed.exists() else "incomplete"
         row = {"method": arm, "seed": ev.get("seed", d.name.rsplit("_s", 1)[-1]) if arm != "base" else "",
                "status": "evaluated" if ev else "not evaluated",
                "success_pct": 100 * ev["all"] if "all" in ev else "",
@@ -272,25 +293,56 @@ def write_run_comparison(runs: Path, split: str, out: Path, arms=None, seeds=Non
                "iterations": last.get("iteration", ""),
                "env_steps": last.get("env_steps_total", ""),
                "response_tokens": last.get("response_tokens_total", ""),
-               "training_seconds": last.get("seconds_total", "")}
+               "training_seconds": last.get("seconds_total", ""),
+               "training_stop": stop if arm != "base" else "not trained"}
         rows.append(row)
     fields = ["method", "seed", "status", "success_pct", "eval_tasks", "iterations",
-              "env_steps", "response_tokens", "training_seconds"]
+              "env_steps", "response_tokens", "training_seconds", "training_stop"]
+    # The deadline may arrive before a selected method starts. Show it explicitly
+    # rather than silently dropping it or treating its missing score as a failure.
+    present = {(r["method"], str(r["seed"])) for r in rows}
+    if arms and seeds is not None:
+        for seed in seeds:
+            for arm in arms:
+                if (arm, str(seed)) not in present:
+                    exists = (runs / f"{arm}_s{seed}").exists()
+                    row = dict.fromkeys(fields, "")
+                    row.update(method=arm, seed=seed, status="not evaluated" if exists else "not started",
+                               training_stop="incomplete" if exists else "not started")
+                    rows.append(row)
     with (out / "runs.csv").open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
     text = ("### Individual runs\n\nTraining time includes rollout and updates, excluding model startup, "
-            "checkpoint saves and evaluation. Missing evaluations are not zero successes.\n\n"
-            "| Method | Seed | Status | Success (%) | Eval tasks | Iterations | Env steps | Training (h) |\n"
-            "|---|---:|---|---:|---:|---:|---:|---:|\n")
+            "checkpoint saves and evaluation. Missing evaluations are not zero successes. "
+            "Time-budgeted methods may finish different numbers of updates; compare their recorded costs too.\n\n"
+            "| Method | Seed | Status | Success (%) | Eval tasks | Iterations | Env steps | Training (h) | Training stop |\n"
+            "|---|---:|---|---:|---:|---:|---:|---:|---|\n")
     for r in rows:
         success = f"{r['success_pct']:.1f}" if r["success_pct"] != "" else "—"
         hours = f"{r['training_seconds'] / 3600:.2f}" if r["training_seconds"] != "" else "—"
         text += (f"| {r['method']} | {r['seed']} | {r['status']} | {success} | {r['eval_tasks']} | "
-                 f"{r['iterations']} | {r['env_steps']} | {hours} |\n")
+                 f"{r['iterations']} | {r['env_steps']} | {hours} | {r['training_stop']} |\n")
     (out / "runs.md").write_text(text, encoding="utf-8")
     return text
+
+
+def curiosity_comparisons(evals):
+    text = ("## Curiosity against its matching baseline\n\n"
+            "These comparisons isolate adding curiosity within each algorithm. "
+            "One seed is a development screen, not replication across training randomness.\n\n")
+    results = {}
+    for baseline in ("grpo", "empg"):
+        subset = {a: rs for a, rs in evals.items() if a == baseline or a.startswith(baseline + "_cur_")}
+        if baseline not in subset or len(subset) < 2:
+            continue
+        md, pairs = comparisons(subset, baseline)
+        text += md + "\n"
+        results.update({f"{arm} vs {baseline}": row for arm, row in pairs.items()})
+    if not results:
+        text += "No completed curiosity/baseline pairs available.\n"
+    return text, results
 
 
 def main():
@@ -329,13 +381,16 @@ def main():
     paired_md, paired = comparisons(evals, args.baseline)
     (out / "paired_comparisons.md").write_text(paired_md)
     (out / "paired_comparisons.json").write_text(json.dumps(paired, indent=2))
+    curiosity_md, curiosity_pairs = curiosity_comparisons(evals)
+    (out / "curiosity_comparisons.md").write_text(curiosity_md, encoding="utf-8")
+    (out / "curiosity_comparisons.json").write_text(json.dumps(curiosity_pairs, indent=2))
     all_rows = with_extra_arms([("base", "Zero-shot base"), *ARMS], evals)
     individual = write_run_comparison(Path(args.runs), args.split, out, args.arms, args.seeds)
     combined = (f"# ALFWorld `{args.split}` benchmark comparison\n\n"
                 "Success rates are percentages; ± is sample standard deviation across training seeds. "
                 "Paired intervals below are unadjusted for multiple comparisons. "
                 "Selecting a winner among many methods needs fresh confirmation.\n\n"
-                + table(evals, all_rows, SUBTASKS) + "\n" + paired_md + "\n" + individual)
+                + table(evals, all_rows, SUBTASKS) + "\n" + paired_md + "\n" + curiosity_md + "\n" + individual)
     (out / "comparison.md").write_text(combined, encoding="utf-8")
     if curves:
         plot(curves, out / "training_curves.png")

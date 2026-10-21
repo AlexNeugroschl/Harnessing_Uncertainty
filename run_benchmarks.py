@@ -14,6 +14,7 @@ import argparse
 import dataclasses
 from datetime import datetime, timezone
 import json
+import math
 import os
 from pathlib import Path, PureWindowsPath
 import subprocess
@@ -123,10 +124,13 @@ def main(argv=None):
     from benchmarks.suite import _finished, _matching_eval
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--tier", choices=tiers(), default="full")
+    ap.add_argument("--tier", choices=tiers(), default="overnight")
     ap.add_argument("--arms", nargs="+", choices=list(arms()),
                     help="override the uncommented ENABLED_METHODS lines at the top of this file")
-    ap.add_argument("--seeds", nargs="+", type=int, default=[0, 1, 2])
+    ap.add_argument("--seeds", nargs="+", type=int,
+                    help="default: 0 for overnight/pilot/small/smoke; 0 1 2 for full/reduced")
+    ap.add_argument("--hours", type=float,
+                    help="training/evaluation wall-clock deadline; default 8 for overnight, 0 (unlimited) otherwise")
     ap.add_argument("--runs", help="run directory (default runs/<tier>)")
     ap.add_argument("--out", help="report directory (default results/<tier>)")
     ap.add_argument("--baseline", default="grpo", choices=list(arms()))
@@ -136,6 +140,12 @@ def main(argv=None):
     modes.add_argument("--report-only", action="store_true", help="regenerate tables from existing runs")
     ap.add_argument("overrides", nargs="*", help="shared dotted config overrides; precede with -- after --seeds/--arms")
     args = ap.parse_args(argv)
+    if args.seeds is None:
+        args.seeds = [0, 1, 2] if args.tier in ("full", "reduced") else [0]
+    if args.hours is None:
+        args.hours = 8. if args.tier == "overnight" else 0.
+    if not math.isfinite(args.hours) or args.hours < 0:
+        ap.error("--hours must be finite and nonnegative (0 disables the deadline)")
     if args.arms is None:
         args.arms = list(ENABLED_METHODS)
     if not args.arms:
@@ -182,6 +192,11 @@ def main(argv=None):
           f"; {len(remaining)} evaluations remaining (including base if requested).", flush=True)
     print(f"Estimated remaining runtime: {duration(totals['low_seconds'])} to "
           f"{duration(totals['high_seconds'])}; full-horizon extrapolation {duration(totals['seconds'])}.")
+    if args.hours:
+        print(f"Training/evaluation deadline: {args.hours:g} hours, then cleanup and reports. "
+              "If reached, unfinished methods remain explicitly incomplete.", flush=True)
+        if totals["high_seconds"] > args.hours * 3600:
+            print("The estimate exceeds the deadline; select fewer methods/seeds or allow more hours to finish all runs.")
     print("Calibration: RTX 5060 Laptop 8GB, Qwen2.5-1.5B LoRA, HF, four workers. "
           "Range models early finishes / timing variation; it is not a measured confidence interval. "
           "Longer prompts, response lengths, other models/backends or hardware can exceed it.")
@@ -189,8 +204,10 @@ def main(argv=None):
     if args.estimate_only:
         return 0
 
+    runs.mkdir(parents=True, exist_ok=True)
     out.mkdir(parents=True, exist_ok=True)
     manifest = {"started_utc": datetime.now(timezone.utc).isoformat(), "tier": args.tier,
+                "hours": args.hours,
                 "arms": args.arms, "seeds": args.seeds, "baseline": args.baseline,
                 "runs": str(runs.resolve()), "split": split, "remaining_estimates": remaining,
                 "estimate": totals, "configs": [dataclasses.asdict(c) for c in configs],
@@ -201,12 +218,20 @@ def main(argv=None):
                  "--arms", *args.arms, "--seeds", *map(str, args.seeds)]
     if args.skip_base:
         suite_cmd.append("--skip-base")
+    if args.hours:
+        suite_cmd.extend(["--max-seconds", str(args.hours * 3600)])
     suite_cmd.extend(["--", *overrides])
     start = time.perf_counter()
     try:
         execute(suite_cmd)
         manifest["status"] = "complete"
-    except (subprocess.CalledProcessError, KeyboardInterrupt):
+    except subprocess.CalledProcessError as exc:
+        if exc.returncode == 124:
+            manifest["status"] = "deadline_reached"
+        else:
+            manifest["status"] = "interrupted_or_failed"
+            raise
+    except KeyboardInterrupt:
         manifest["status"] = "interrupted_or_failed"
         raise
     finally:
@@ -228,8 +253,9 @@ def main(argv=None):
             manifest["elapsed_seconds"] = time.perf_counter() - start
             manifest["finished_utc"] = datetime.now(timezone.utc).isoformat()
             manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    print(f"Finished in {duration(manifest['elapsed_seconds'])}. Tables: {(out / 'comparison.md').resolve()}")
-    return 0
+    outcome = "Deadline reached; partial results" if manifest["status"] == "deadline_reached" else "Finished"
+    print(f"{outcome} in {duration(manifest['elapsed_seconds'])}. Tables: {(out / 'comparison.md').resolve()}")
+    return 124 if manifest["status"] == "deadline_reached" else 0
 
 
 if __name__ == "__main__":

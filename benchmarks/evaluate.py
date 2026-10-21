@@ -105,8 +105,15 @@ def main():
     res, lengths = evaluate(policy, cfg)
     out = eval_path(cfg, args.base)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(res, indent=2))
-    (out.parent / f"resp_lengths_eval_{cfg.eval.split}.json").write_text(json.dumps(lengths))
+    length_out = out.parent / f"resp_lengths_eval_{cfg.eval.split}.json"
+    temporary = length_out.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(lengths))
+    temporary.replace(length_out)
+    # A suite deadline must not leave a half-written evaluation looking complete.
+    # Publish the score last, when its companion artifact is also complete.
+    temporary = out.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(res, indent=2))
+    temporary.replace(out)
     print(json.dumps(res, indent=2))
 
 

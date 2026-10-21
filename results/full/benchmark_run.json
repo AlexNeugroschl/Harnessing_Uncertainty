@@ -1,0 +1,1159 @@
+{
+  "started_utc": "2026-10-14T01:02:03.460174+00:00",
+  "tier": "full",
+  "arms": [
+    "grpo",
+    "empg",
+    "grpo_cur_group",
+    "empg_cur_episodic"
+  ],
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "baseline": "grpo",
+  "runs": "/mnt/c/Users/alexn/Documents/Resume Projects/Harnessing_Uncertainty/runs/full",
+  "split": "valid_unseen",
+  "remaining_estimates": [
+    {
+      "arm": "base",
+      "seed": null,
+      "seconds": 5832.3675,
+      "low_seconds": 2916.18375,
+      "high_seconds": 8748.55125,
+      "training_seconds": 0.0,
+      "evaluation_seconds": 5802.3675,
+      "eval_tasks": 134,
+      "training_steps_at_caps": 0
+    },
+    {
+      "arm": "grpo",
+      "seed": 0,
+      "seconds": 54775.167499999996,
+      "low_seconds": 27387.583749999998,
+      "high_seconds": 82162.75125,
+      "training_seconds": 48912.799999999996,
+      "evaluation_seconds": 5802.3675,
+      "eval_tasks": 134,
+      "training_steps_at_caps": 32000
+    },
+    {
+      "arm": "empg",
+      "seed": 0,
+      "seconds": 54775.167499999996,
+      "low_seconds": 27387.583749999998,
+      "high_seconds": 82162.75125,
+      "training_seconds": 48912.799999999996,
+      "evaluation_seconds": 5802.3675,
+      "eval_tasks": 134,
+      "training_steps_at_caps": 32000
+    },
+    {
+      "arm": "grpo_cur_group",
+      "seed": 0,
+      "seconds": 54775.167499999996,
+      "low_seconds": 27387.583749999998,
+      "high_seconds": 82162.75125,
+      "training_seconds": 48912.799999999996,
+      "evaluation_seconds": 5802.3675,
+      "eval_tasks": 134,
+      "training_steps_at_caps": 32000
+    },
+    {
+      "arm": "empg_cur_episodic",
+      "seed": 0,
+      "seconds": 54775.167499999996,
+      "low_seconds": 27387.583749999998,
+      "high_seconds": 82162.75125,
+      "training_seconds": 48912.799999999996,
+      "evaluation_seconds": 5802.3675,
+      "eval_tasks": 134,
+      "training_steps_at_caps": 32000
+    },
+    {
+      "arm": "grpo",
+      "seed": 1,
+      "seconds": 54775.167499999996,
+      "low_seconds": 27387.583749999998,
+      "high_seconds": 82162.75125,
+      "training_seconds": 48912.799999999996,
+      "evaluation_seconds": 5802.3675,
+      "eval_tasks": 134,
+      "training_steps_at_caps": 32000
+    },
+    {
+      "arm": "empg",
+      "seed": 1,
+      "seconds": 54775.167499999996,
+      "low_seconds": 27387.583749999998,
+      "high_seconds": 82162.75125,
+      "training_seconds": 48912.799999999996,
+      "evaluation_seconds": 5802.3675,
+      "eval_tasks": 134,
+      "training_steps_at_caps": 32000
+    },
+    {
+      "arm": "grpo_cur_group",
+      "seed": 1,
+      "seconds": 54775.167499999996,
+      "low_seconds": 27387.583749999998,
+      "high_seconds": 82162.75125,
+      "training_seconds": 48912.799999999996,
+      "evaluation_seconds": 5802.3675,
+      "eval_tasks": 134,
+      "training_steps_at_caps": 32000
+    },
+    {
+      "arm": "empg_cur_episodic",
+      "seed": 1,
+      "seconds": 54775.167499999996,
+      "low_seconds": 27387.583749999998,
+      "high_seconds": 82162.75125,
+      "training_seconds": 48912.799999999996,
+      "evaluation_seconds": 5802.3675,
+      "eval_tasks": 134,
+      "training_steps_at_caps": 32000
+    },
+    {
+      "arm": "grpo",
+      "seed": 2,
+      "seconds": 54775.167499999996,
+      "low_seconds": 27387.583749999998,
+      "high_seconds": 82162.75125,
+      "training_seconds": 48912.799999999996,
+      "evaluation_seconds": 5802.3675,
+      "eval_tasks": 134,
+      "training_steps_at_caps": 32000
+    },
+    {
+      "arm": "empg",
+      "seed": 2,
+      "seconds": 54775.167499999996,
+      "low_seconds": 27387.583749999998,
+      "high_seconds": 82162.75125,
+      "training_seconds": 48912.799999999996,
+      "evaluation_seconds": 5802.3675,
+      "eval_tasks": 134,
+      "training_steps_at_caps": 32000
+    },
+    {
+      "arm": "grpo_cur_group",
+      "seed": 2,
+      "seconds": 54775.167499999996,
+      "low_seconds": 27387.583749999998,
+      "high_seconds": 82162.75125,
+      "training_seconds": 48912.799999999996,
+      "evaluation_seconds": 5802.3675,
+      "eval_tasks": 134,
+      "training_steps_at_caps": 32000
+    },
+    {
+      "arm": "empg_cur_episodic",
+      "seed": 2,
+      "seconds": 54775.167499999996,
+      "low_seconds": 27387.583749999998,
+      "high_seconds": 82162.75125,
+      "training_seconds": 48912.799999999996,
+      "evaluation_seconds": 5802.3675,
+      "eval_tasks": 134,
+      "training_steps_at_caps": 32000
+    }
+  ],
+  "estimate": {
+    "seconds": 663179.3775,
+    "low_seconds": 331589.68875,
+    "high_seconds": 994769.06625
+  },
+  "configs": [
+    {
+      "name": "grpo",
+      "seed": 0,
+      "out_dir": "runs/full",
+      "benchmark": "alfworld",
+      "env": {
+        "history_length": 2,
+        "memory": false,
+        "workers": 4
+      },
+      "policy": {
+        "model_name": "Qwen/Qwen2.5-1.5B-Instruct",
+        "dtype": "bfloat16",
+        "lora_r": 16,
+        "lora_alpha": 32,
+        "lora_dropout": 0.0,
+        "lora_targets": [
+          "all-linear"
+        ],
+        "gradient_checkpointing": true,
+        "max_new_tokens": 256,
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "gen_batch_size": 32,
+        "micro_batch_size": 2,
+        "head_chunk_size": 128,
+        "chunked_head": true,
+        "backend": "hf",
+        "merge_lora": true,
+        "vllm_gpu_memory_utilization": 0.8,
+        "vllm_max_model_len": 8192,
+        "vllm_enforce_eager": true
+      },
+      "advantage": {
+        "method": "grpo",
+        "use_g": true,
+        "use_f": true,
+        "k": 1.0,
+        "k_prime": 1.0,
+        "zeta": 0.05,
+        "curiosity": {
+          "weight": 0.0,
+          "key": "parsed",
+          "scope": "episodic",
+          "bonus": "inv_sqrt",
+          "mode": "step",
+          "schedule": "constant",
+          "decay_iters": 0,
+          "gate": "none",
+          "modulate": "none",
+          "cap": 0.0
+        }
+      },
+      "train": {
+        "iterations": 40,
+        "games_per_iter": 2,
+        "group_size": 8,
+        "max_steps": 50,
+        "success_reward": 10.0,
+        "invalid_penalty": 0.1,
+        "lr": 1e-05,
+        "weight_decay": 0.0,
+        "kl_coef": 0.01,
+        "clip_low": 0.2,
+        "clip_high": 0.2,
+        "ppo_epochs": 1,
+        "mini_batches": 2,
+        "max_grad_norm": 1.0,
+        "save_every": 10,
+        "max_env_steps": 0,
+        "max_seconds": 0.0
+      },
+      "eval": {
+        "split": "valid_unseen",
+        "max_tasks": 0,
+        "max_steps": 50,
+        "greedy": true,
+        "batch_envs": 32,
+        "selection": "stratified",
+        "selection_seed": 0
+      }
+    },
+    {
+      "name": "empg",
+      "seed": 0,
+      "out_dir": "runs/full",
+      "benchmark": "alfworld",
+      "env": {
+        "history_length": 2,
+        "memory": false,
+        "workers": 4
+      },
+      "policy": {
+        "model_name": "Qwen/Qwen2.5-1.5B-Instruct",
+        "dtype": "bfloat16",
+        "lora_r": 16,
+        "lora_alpha": 32,
+        "lora_dropout": 0.0,
+        "lora_targets": [
+          "all-linear"
+        ],
+        "gradient_checkpointing": true,
+        "max_new_tokens": 256,
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "gen_batch_size": 32,
+        "micro_batch_size": 2,
+        "head_chunk_size": 128,
+        "chunked_head": true,
+        "backend": "hf",
+        "merge_lora": true,
+        "vllm_gpu_memory_utilization": 0.8,
+        "vllm_max_model_len": 8192,
+        "vllm_enforce_eager": true
+      },
+      "advantage": {
+        "method": "empg",
+        "use_g": true,
+        "use_f": true,
+        "k": 1.0,
+        "k_prime": 1.0,
+        "zeta": 0.05,
+        "curiosity": {
+          "weight": 0.0,
+          "key": "parsed",
+          "scope": "episodic",
+          "bonus": "inv_sqrt",
+          "mode": "step",
+          "schedule": "constant",
+          "decay_iters": 0,
+          "gate": "none",
+          "modulate": "none",
+          "cap": 0.0
+        }
+      },
+      "train": {
+        "iterations": 40,
+        "games_per_iter": 2,
+        "group_size": 8,
+        "max_steps": 50,
+        "success_reward": 10.0,
+        "invalid_penalty": 0.1,
+        "lr": 1e-05,
+        "weight_decay": 0.0,
+        "kl_coef": 0.01,
+        "clip_low": 0.2,
+        "clip_high": 0.2,
+        "ppo_epochs": 1,
+        "mini_batches": 2,
+        "max_grad_norm": 1.0,
+        "save_every": 10,
+        "max_env_steps": 0,
+        "max_seconds": 0.0
+      },
+      "eval": {
+        "split": "valid_unseen",
+        "max_tasks": 0,
+        "max_steps": 50,
+        "greedy": true,
+        "batch_envs": 32,
+        "selection": "stratified",
+        "selection_seed": 0
+      }
+    },
+    {
+      "name": "grpo_cur_group",
+      "seed": 0,
+      "out_dir": "runs/full",
+      "benchmark": "alfworld",
+      "env": {
+        "history_length": 2,
+        "memory": false,
+        "workers": 4
+      },
+      "policy": {
+        "model_name": "Qwen/Qwen2.5-1.5B-Instruct",
+        "dtype": "bfloat16",
+        "lora_r": 16,
+        "lora_alpha": 32,
+        "lora_dropout": 0.0,
+        "lora_targets": [
+          "all-linear"
+        ],
+        "gradient_checkpointing": true,
+        "max_new_tokens": 256,
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "gen_batch_size": 32,
+        "micro_batch_size": 2,
+        "head_chunk_size": 128,
+        "chunked_head": true,
+        "backend": "hf",
+        "merge_lora": true,
+        "vllm_gpu_memory_utilization": 0.8,
+        "vllm_max_model_len": 8192,
+        "vllm_enforce_eager": true
+      },
+      "advantage": {
+        "method": "grpo",
+        "use_g": true,
+        "use_f": true,
+        "k": 1.0,
+        "k_prime": 1.0,
+        "zeta": 0.05,
+        "curiosity": {
+          "weight": 0.05,
+          "key": "parsed",
+          "scope": "group",
+          "bonus": "inv_sqrt",
+          "mode": "step",
+          "schedule": "constant",
+          "decay_iters": 0,
+          "gate": "none",
+          "modulate": "none",
+          "cap": 0.0
+        }
+      },
+      "train": {
+        "iterations": 40,
+        "games_per_iter": 2,
+        "group_size": 8,
+        "max_steps": 50,
+        "success_reward": 10.0,
+        "invalid_penalty": 0.1,
+        "lr": 1e-05,
+        "weight_decay": 0.0,
+        "kl_coef": 0.01,
+        "clip_low": 0.2,
+        "clip_high": 0.2,
+        "ppo_epochs": 1,
+        "mini_batches": 2,
+        "max_grad_norm": 1.0,
+        "save_every": 10,
+        "max_env_steps": 0,
+        "max_seconds": 0.0
+      },
+      "eval": {
+        "split": "valid_unseen",
+        "max_tasks": 0,
+        "max_steps": 50,
+        "greedy": true,
+        "batch_envs": 32,
+        "selection": "stratified",
+        "selection_seed": 0
+      }
+    },
+    {
+      "name": "empg_cur_episodic",
+      "seed": 0,
+      "out_dir": "runs/full",
+      "benchmark": "alfworld",
+      "env": {
+        "history_length": 2,
+        "memory": false,
+        "workers": 4
+      },
+      "policy": {
+        "model_name": "Qwen/Qwen2.5-1.5B-Instruct",
+        "dtype": "bfloat16",
+        "lora_r": 16,
+        "lora_alpha": 32,
+        "lora_dropout": 0.0,
+        "lora_targets": [
+          "all-linear"
+        ],
+        "gradient_checkpointing": true,
+        "max_new_tokens": 256,
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "gen_batch_size": 32,
+        "micro_batch_size": 2,
+        "head_chunk_size": 128,
+        "chunked_head": true,
+        "backend": "hf",
+        "merge_lora": true,
+        "vllm_gpu_memory_utilization": 0.8,
+        "vllm_max_model_len": 8192,
+        "vllm_enforce_eager": true
+      },
+      "advantage": {
+        "method": "empg",
+        "use_g": true,
+        "use_f": true,
+        "k": 1.0,
+        "k_prime": 1.0,
+        "zeta": 0.05,
+        "curiosity": {
+          "weight": 0.05,
+          "key": "parsed",
+          "scope": "episodic",
+          "bonus": "inv_sqrt",
+          "mode": "step",
+          "schedule": "constant",
+          "decay_iters": 0,
+          "gate": "none",
+          "modulate": "none",
+          "cap": 0.0
+        }
+      },
+      "train": {
+        "iterations": 40,
+        "games_per_iter": 2,
+        "group_size": 8,
+        "max_steps": 50,
+        "success_reward": 10.0,
+        "invalid_penalty": 0.1,
+        "lr": 1e-05,
+        "weight_decay": 0.0,
+        "kl_coef": 0.01,
+        "clip_low": 0.2,
+        "clip_high": 0.2,
+        "ppo_epochs": 1,
+        "mini_batches": 2,
+        "max_grad_norm": 1.0,
+        "save_every": 10,
+        "max_env_steps": 0,
+        "max_seconds": 0.0
+      },
+      "eval": {
+        "split": "valid_unseen",
+        "max_tasks": 0,
+        "max_steps": 50,
+        "greedy": true,
+        "batch_envs": 32,
+        "selection": "stratified",
+        "selection_seed": 0
+      }
+    },
+    {
+      "name": "grpo",
+      "seed": 1,
+      "out_dir": "runs/full",
+      "benchmark": "alfworld",
+      "env": {
+        "history_length": 2,
+        "memory": false,
+        "workers": 4
+      },
+      "policy": {
+        "model_name": "Qwen/Qwen2.5-1.5B-Instruct",
+        "dtype": "bfloat16",
+        "lora_r": 16,
+        "lora_alpha": 32,
+        "lora_dropout": 0.0,
+        "lora_targets": [
+          "all-linear"
+        ],
+        "gradient_checkpointing": true,
+        "max_new_tokens": 256,
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "gen_batch_size": 32,
+        "micro_batch_size": 2,
+        "head_chunk_size": 128,
+        "chunked_head": true,
+        "backend": "hf",
+        "merge_lora": true,
+        "vllm_gpu_memory_utilization": 0.8,
+        "vllm_max_model_len": 8192,
+        "vllm_enforce_eager": true
+      },
+      "advantage": {
+        "method": "grpo",
+        "use_g": true,
+        "use_f": true,
+        "k": 1.0,
+        "k_prime": 1.0,
+        "zeta": 0.05,
+        "curiosity": {
+          "weight": 0.0,
+          "key": "parsed",
+          "scope": "episodic",
+          "bonus": "inv_sqrt",
+          "mode": "step",
+          "schedule": "constant",
+          "decay_iters": 0,
+          "gate": "none",
+          "modulate": "none",
+          "cap": 0.0
+        }
+      },
+      "train": {
+        "iterations": 40,
+        "games_per_iter": 2,
+        "group_size": 8,
+        "max_steps": 50,
+        "success_reward": 10.0,
+        "invalid_penalty": 0.1,
+        "lr": 1e-05,
+        "weight_decay": 0.0,
+        "kl_coef": 0.01,
+        "clip_low": 0.2,
+        "clip_high": 0.2,
+        "ppo_epochs": 1,
+        "mini_batches": 2,
+        "max_grad_norm": 1.0,
+        "save_every": 10,
+        "max_env_steps": 0,
+        "max_seconds": 0.0
+      },
+      "eval": {
+        "split": "valid_unseen",
+        "max_tasks": 0,
+        "max_steps": 50,
+        "greedy": true,
+        "batch_envs": 32,
+        "selection": "stratified",
+        "selection_seed": 0
+      }
+    },
+    {
+      "name": "empg",
+      "seed": 1,
+      "out_dir": "runs/full",
+      "benchmark": "alfworld",
+      "env": {
+        "history_length": 2,
+        "memory": false,
+        "workers": 4
+      },
+      "policy": {
+        "model_name": "Qwen/Qwen2.5-1.5B-Instruct",
+        "dtype": "bfloat16",
+        "lora_r": 16,
+        "lora_alpha": 32,
+        "lora_dropout": 0.0,
+        "lora_targets": [
+          "all-linear"
+        ],
+        "gradient_checkpointing": true,
+        "max_new_tokens": 256,
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "gen_batch_size": 32,
+        "micro_batch_size": 2,
+        "head_chunk_size": 128,
+        "chunked_head": true,
+        "backend": "hf",
+        "merge_lora": true,
+        "vllm_gpu_memory_utilization": 0.8,
+        "vllm_max_model_len": 8192,
+        "vllm_enforce_eager": true
+      },
+      "advantage": {
+        "method": "empg",
+        "use_g": true,
+        "use_f": true,
+        "k": 1.0,
+        "k_prime": 1.0,
+        "zeta": 0.05,
+        "curiosity": {
+          "weight": 0.0,
+          "key": "parsed",
+          "scope": "episodic",
+          "bonus": "inv_sqrt",
+          "mode": "step",
+          "schedule": "constant",
+          "decay_iters": 0,
+          "gate": "none",
+          "modulate": "none",
+          "cap": 0.0
+        }
+      },
+      "train": {
+        "iterations": 40,
+        "games_per_iter": 2,
+        "group_size": 8,
+        "max_steps": 50,
+        "success_reward": 10.0,
+        "invalid_penalty": 0.1,
+        "lr": 1e-05,
+        "weight_decay": 0.0,
+        "kl_coef": 0.01,
+        "clip_low": 0.2,
+        "clip_high": 0.2,
+        "ppo_epochs": 1,
+        "mini_batches": 2,
+        "max_grad_norm": 1.0,
+        "save_every": 10,
+        "max_env_steps": 0,
+        "max_seconds": 0.0
+      },
+      "eval": {
+        "split": "valid_unseen",
+        "max_tasks": 0,
+        "max_steps": 50,
+        "greedy": true,
+        "batch_envs": 32,
+        "selection": "stratified",
+        "selection_seed": 0
+      }
+    },
+    {
+      "name": "grpo_cur_group",
+      "seed": 1,
+      "out_dir": "runs/full",
+      "benchmark": "alfworld",
+      "env": {
+        "history_length": 2,
+        "memory": false,
+        "workers": 4
+      },
+      "policy": {
+        "model_name": "Qwen/Qwen2.5-1.5B-Instruct",
+        "dtype": "bfloat16",
+        "lora_r": 16,
+        "lora_alpha": 32,
+        "lora_dropout": 0.0,
+        "lora_targets": [
+          "all-linear"
+        ],
+        "gradient_checkpointing": true,
+        "max_new_tokens": 256,
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "gen_batch_size": 32,
+        "micro_batch_size": 2,
+        "head_chunk_size": 128,
+        "chunked_head": true,
+        "backend": "hf",
+        "merge_lora": true,
+        "vllm_gpu_memory_utilization": 0.8,
+        "vllm_max_model_len": 8192,
+        "vllm_enforce_eager": true
+      },
+      "advantage": {
+        "method": "grpo",
+        "use_g": true,
+        "use_f": true,
+        "k": 1.0,
+        "k_prime": 1.0,
+        "zeta": 0.05,
+        "curiosity": {
+          "weight": 0.05,
+          "key": "parsed",
+          "scope": "group",
+          "bonus": "inv_sqrt",
+          "mode": "step",
+          "schedule": "constant",
+          "decay_iters": 0,
+          "gate": "none",
+          "modulate": "none",
+          "cap": 0.0
+        }
+      },
+      "train": {
+        "iterations": 40,
+        "games_per_iter": 2,
+        "group_size": 8,
+        "max_steps": 50,
+        "success_reward": 10.0,
+        "invalid_penalty": 0.1,
+        "lr": 1e-05,
+        "weight_decay": 0.0,
+        "kl_coef": 0.01,
+        "clip_low": 0.2,
+        "clip_high": 0.2,
+        "ppo_epochs": 1,
+        "mini_batches": 2,
+        "max_grad_norm": 1.0,
+        "save_every": 10,
+        "max_env_steps": 0,
+        "max_seconds": 0.0
+      },
+      "eval": {
+        "split": "valid_unseen",
+        "max_tasks": 0,
+        "max_steps": 50,
+        "greedy": true,
+        "batch_envs": 32,
+        "selection": "stratified",
+        "selection_seed": 0
+      }
+    },
+    {
+      "name": "empg_cur_episodic",
+      "seed": 1,
+      "out_dir": "runs/full",
+      "benchmark": "alfworld",
+      "env": {
+        "history_length": 2,
+        "memory": false,
+        "workers": 4
+      },
+      "policy": {
+        "model_name": "Qwen/Qwen2.5-1.5B-Instruct",
+        "dtype": "bfloat16",
+        "lora_r": 16,
+        "lora_alpha": 32,
+        "lora_dropout": 0.0,
+        "lora_targets": [
+          "all-linear"
+        ],
+        "gradient_checkpointing": true,
+        "max_new_tokens": 256,
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "gen_batch_size": 32,
+        "micro_batch_size": 2,
+        "head_chunk_size": 128,
+        "chunked_head": true,
+        "backend": "hf",
+        "merge_lora": true,
+        "vllm_gpu_memory_utilization": 0.8,
+        "vllm_max_model_len": 8192,
+        "vllm_enforce_eager": true
+      },
+      "advantage": {
+        "method": "empg",
+        "use_g": true,
+        "use_f": true,
+        "k": 1.0,
+        "k_prime": 1.0,
+        "zeta": 0.05,
+        "curiosity": {
+          "weight": 0.05,
+          "key": "parsed",
+          "scope": "episodic",
+          "bonus": "inv_sqrt",
+          "mode": "step",
+          "schedule": "constant",
+          "decay_iters": 0,
+          "gate": "none",
+          "modulate": "none",
+          "cap": 0.0
+        }
+      },
+      "train": {
+        "iterations": 40,
+        "games_per_iter": 2,
+        "group_size": 8,
+        "max_steps": 50,
+        "success_reward": 10.0,
+        "invalid_penalty": 0.1,
+        "lr": 1e-05,
+        "weight_decay": 0.0,
+        "kl_coef": 0.01,
+        "clip_low": 0.2,
+        "clip_high": 0.2,
+        "ppo_epochs": 1,
+        "mini_batches": 2,
+        "max_grad_norm": 1.0,
+        "save_every": 10,
+        "max_env_steps": 0,
+        "max_seconds": 0.0
+      },
+      "eval": {
+        "split": "valid_unseen",
+        "max_tasks": 0,
+        "max_steps": 50,
+        "greedy": true,
+        "batch_envs": 32,
+        "selection": "stratified",
+        "selection_seed": 0
+      }
+    },
+    {
+      "name": "grpo",
+      "seed": 2,
+      "out_dir": "runs/full",
+      "benchmark": "alfworld",
+      "env": {
+        "history_length": 2,
+        "memory": false,
+        "workers": 4
+      },
+      "policy": {
+        "model_name": "Qwen/Qwen2.5-1.5B-Instruct",
+        "dtype": "bfloat16",
+        "lora_r": 16,
+        "lora_alpha": 32,
+        "lora_dropout": 0.0,
+        "lora_targets": [
+          "all-linear"
+        ],
+        "gradient_checkpointing": true,
+        "max_new_tokens": 256,
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "gen_batch_size": 32,
+        "micro_batch_size": 2,
+        "head_chunk_size": 128,
+        "chunked_head": true,
+        "backend": "hf",
+        "merge_lora": true,
+        "vllm_gpu_memory_utilization": 0.8,
+        "vllm_max_model_len": 8192,
+        "vllm_enforce_eager": true
+      },
+      "advantage": {
+        "method": "grpo",
+        "use_g": true,
+        "use_f": true,
+        "k": 1.0,
+        "k_prime": 1.0,
+        "zeta": 0.05,
+        "curiosity": {
+          "weight": 0.0,
+          "key": "parsed",
+          "scope": "episodic",
+          "bonus": "inv_sqrt",
+          "mode": "step",
+          "schedule": "constant",
+          "decay_iters": 0,
+          "gate": "none",
+          "modulate": "none",
+          "cap": 0.0
+        }
+      },
+      "train": {
+        "iterations": 40,
+        "games_per_iter": 2,
+        "group_size": 8,
+        "max_steps": 50,
+        "success_reward": 10.0,
+        "invalid_penalty": 0.1,
+        "lr": 1e-05,
+        "weight_decay": 0.0,
+        "kl_coef": 0.01,
+        "clip_low": 0.2,
+        "clip_high": 0.2,
+        "ppo_epochs": 1,
+        "mini_batches": 2,
+        "max_grad_norm": 1.0,
+        "save_every": 10,
+        "max_env_steps": 0,
+        "max_seconds": 0.0
+      },
+      "eval": {
+        "split": "valid_unseen",
+        "max_tasks": 0,
+        "max_steps": 50,
+        "greedy": true,
+        "batch_envs": 32,
+        "selection": "stratified",
+        "selection_seed": 0
+      }
+    },
+    {
+      "name": "empg",
+      "seed": 2,
+      "out_dir": "runs/full",
+      "benchmark": "alfworld",
+      "env": {
+        "history_length": 2,
+        "memory": false,
+        "workers": 4
+      },
+      "policy": {
+        "model_name": "Qwen/Qwen2.5-1.5B-Instruct",
+        "dtype": "bfloat16",
+        "lora_r": 16,
+        "lora_alpha": 32,
+        "lora_dropout": 0.0,
+        "lora_targets": [
+          "all-linear"
+        ],
+        "gradient_checkpointing": true,
+        "max_new_tokens": 256,
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "gen_batch_size": 32,
+        "micro_batch_size": 2,
+        "head_chunk_size": 128,
+        "chunked_head": true,
+        "backend": "hf",
+        "merge_lora": true,
+        "vllm_gpu_memory_utilization": 0.8,
+        "vllm_max_model_len": 8192,
+        "vllm_enforce_eager": true
+      },
+      "advantage": {
+        "method": "empg",
+        "use_g": true,
+        "use_f": true,
+        "k": 1.0,
+        "k_prime": 1.0,
+        "zeta": 0.05,
+        "curiosity": {
+          "weight": 0.0,
+          "key": "parsed",
+          "scope": "episodic",
+          "bonus": "inv_sqrt",
+          "mode": "step",
+          "schedule": "constant",
+          "decay_iters": 0,
+          "gate": "none",
+          "modulate": "none",
+          "cap": 0.0
+        }
+      },
+      "train": {
+        "iterations": 40,
+        "games_per_iter": 2,
+        "group_size": 8,
+        "max_steps": 50,
+        "success_reward": 10.0,
+        "invalid_penalty": 0.1,
+        "lr": 1e-05,
+        "weight_decay": 0.0,
+        "kl_coef": 0.01,
+        "clip_low": 0.2,
+        "clip_high": 0.2,
+        "ppo_epochs": 1,
+        "mini_batches": 2,
+        "max_grad_norm": 1.0,
+        "save_every": 10,
+        "max_env_steps": 0,
+        "max_seconds": 0.0
+      },
+      "eval": {
+        "split": "valid_unseen",
+        "max_tasks": 0,
+        "max_steps": 50,
+        "greedy": true,
+        "batch_envs": 32,
+        "selection": "stratified",
+        "selection_seed": 0
+      }
+    },
+    {
+      "name": "grpo_cur_group",
+      "seed": 2,
+      "out_dir": "runs/full",
+      "benchmark": "alfworld",
+      "env": {
+        "history_length": 2,
+        "memory": false,
+        "workers": 4
+      },
+      "policy": {
+        "model_name": "Qwen/Qwen2.5-1.5B-Instruct",
+        "dtype": "bfloat16",
+        "lora_r": 16,
+        "lora_alpha": 32,
+        "lora_dropout": 0.0,
+        "lora_targets": [
+          "all-linear"
+        ],
+        "gradient_checkpointing": true,
+        "max_new_tokens": 256,
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "gen_batch_size": 32,
+        "micro_batch_size": 2,
+        "head_chunk_size": 128,
+        "chunked_head": true,
+        "backend": "hf",
+        "merge_lora": true,
+        "vllm_gpu_memory_utilization": 0.8,
+        "vllm_max_model_len": 8192,
+        "vllm_enforce_eager": true
+      },
+      "advantage": {
+        "method": "grpo",
+        "use_g": true,
+        "use_f": true,
+        "k": 1.0,
+        "k_prime": 1.0,
+        "zeta": 0.05,
+        "curiosity": {
+          "weight": 0.05,
+          "key": "parsed",
+          "scope": "group",
+          "bonus": "inv_sqrt",
+          "mode": "step",
+          "schedule": "constant",
+          "decay_iters": 0,
+          "gate": "none",
+          "modulate": "none",
+          "cap": 0.0
+        }
+      },
+      "train": {
+        "iterations": 40,
+        "games_per_iter": 2,
+        "group_size": 8,
+        "max_steps": 50,
+        "success_reward": 10.0,
+        "invalid_penalty": 0.1,
+        "lr": 1e-05,
+        "weight_decay": 0.0,
+        "kl_coef": 0.01,
+        "clip_low": 0.2,
+        "clip_high": 0.2,
+        "ppo_epochs": 1,
+        "mini_batches": 2,
+        "max_grad_norm": 1.0,
+        "save_every": 10,
+        "max_env_steps": 0,
+        "max_seconds": 0.0
+      },
+      "eval": {
+        "split": "valid_unseen",
+        "max_tasks": 0,
+        "max_steps": 50,
+        "greedy": true,
+        "batch_envs": 32,
+        "selection": "stratified",
+        "selection_seed": 0
+      }
+    },
+    {
+      "name": "empg_cur_episodic",
+      "seed": 2,
+      "out_dir": "runs/full",
+      "benchmark": "alfworld",
+      "env": {
+        "history_length": 2,
+        "memory": false,
+        "workers": 4
+      },
+      "policy": {
+        "model_name": "Qwen/Qwen2.5-1.5B-Instruct",
+        "dtype": "bfloat16",
+        "lora_r": 16,
+        "lora_alpha": 32,
+        "lora_dropout": 0.0,
+        "lora_targets": [
+          "all-linear"
+        ],
+        "gradient_checkpointing": true,
+        "max_new_tokens": 256,
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "gen_batch_size": 32,
+        "micro_batch_size": 2,
+        "head_chunk_size": 128,
+        "chunked_head": true,
+        "backend": "hf",
+        "merge_lora": true,
+        "vllm_gpu_memory_utilization": 0.8,
+        "vllm_max_model_len": 8192,
+        "vllm_enforce_eager": true
+      },
+      "advantage": {
+        "method": "empg",
+        "use_g": true,
+        "use_f": true,
+        "k": 1.0,
+        "k_prime": 1.0,
+        "zeta": 0.05,
+        "curiosity": {
+          "weight": 0.05,
+          "key": "parsed",
+          "scope": "episodic",
+          "bonus": "inv_sqrt",
+          "mode": "step",
+          "schedule": "constant",
+          "decay_iters": 0,
+          "gate": "none",
+          "modulate": "none",
+          "cap": 0.0
+        }
+      },
+      "train": {
+        "iterations": 40,
+        "games_per_iter": 2,
+        "group_size": 8,
+        "max_steps": 50,
+        "success_reward": 10.0,
+        "invalid_penalty": 0.1,
+        "lr": 1e-05,
+        "weight_decay": 0.0,
+        "kl_coef": 0.01,
+        "clip_low": 0.2,
+        "clip_high": 0.2,
+        "ppo_epochs": 1,
+        "mini_batches": 2,
+        "max_grad_norm": 1.0,
+        "save_every": 10,
+        "max_env_steps": 0,
+        "max_seconds": 0.0
+      },
+      "eval": {
+        "split": "valid_unseen",
+        "max_tasks": 0,
+        "max_steps": 50,
+        "greedy": true,
+        "batch_envs": 32,
+        "selection": "stratified",
+        "selection_seed": 0
+      }
+    }
+  ],
+  "status": "interrupted_or_failed",
+  "suite_seconds": 2736.000915259996,
+  "report_status": "no_runs",
+  "elapsed_seconds": 2736.007287718996,
+  "finished_utc": "2026-10-14T01:47:40.591195+00:00"
+}

@@ -1,6 +1,7 @@
 import json
 
-from benchmarks.report import comparisons, explore_table, load, load_lengths, table, write_run_comparison
+from benchmarks.report import (comparisons, curiosity_comparisons, explore_table, load,
+                               load_lengths, read_jsonl, table, write_run_comparison)
 
 
 def test_ablation_table_has_the_same_number_of_columns_in_every_row():
@@ -45,3 +46,31 @@ def test_partial_run_is_missing_success_not_zero(tmp_path):
     out.mkdir()
     text = write_run_comparison(tmp_path, "valid_unseen", out)
     assert "| empg | 0 | not evaluated | — |" in text
+
+
+def test_interrupted_last_metric_preserves_earlier_iterations(tmp_path):
+    path = tmp_path / "metrics.jsonl"
+    path.write_text('{"iteration": 1}\n{"iteration":')
+    assert read_jsonl(path) == [{"iteration": 1}]
+    path.write_text('{"iteration": 1}\n{"iteration":\n')
+    import pytest
+    with pytest.raises(json.JSONDecodeError):
+        read_jsonl(path)
+
+
+def test_curiosity_uses_matching_algorithm_baseline():
+    def run(won):
+        return [{"seed": 0, "per_task": [{"task": "t", "won": won}]}]
+    text, comparisons = curiosity_comparisons({"grpo": run(False), "empg": run(True),
+        "grpo_cur_group": run(True), "empg_cur_episodic": run(True)})
+    assert comparisons["grpo_cur_group vs grpo"]["delta"] == 1
+    assert comparisons["empg_cur_episodic vs empg"]["delta"] == 0
+    assert "empg_cur_episodic vs empg" in text
+
+
+def test_unstarted_methods_are_explicit_and_have_no_score(tmp_path):
+    out = tmp_path / "report"
+    out.mkdir()
+    text = write_run_comparison(tmp_path, "valid_seen", out, ["grpo", "empg"], [0])
+    assert "| grpo | 0 | not started | — |" in text
+    assert "| empg | 0 | not started | — |" in text

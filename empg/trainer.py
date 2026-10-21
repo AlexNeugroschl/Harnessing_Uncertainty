@@ -247,8 +247,11 @@ def train(cfg: Config, log=print) -> LLMPolicy:
                 stop_reason = "max_seconds"
                 break
     policy.save(str(run_dir / "adapter"))
-    (run_dir / "training_complete.json").write_text(json.dumps({
+    completed = run_dir / "training_complete.json"
+    temporary = completed.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps({
         "config_fingerprint": config_fingerprint(cfg), "reason": stop_reason,
         "iterations": it, "env_steps": cumulative_steps, "response_tokens": cumulative_tokens,
         "seconds": cumulative_seconds}, indent=2))
+    temporary.replace(completed)
     return policy

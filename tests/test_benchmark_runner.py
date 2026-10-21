@@ -107,3 +107,45 @@ def test_windows_forwarding_keeps_spaces_and_overrides_as_arguments(monkeypatch)
     cmd = commands[0]
     assert cmd[cmd.index("--cd") + 1] == "/mnt/c/Project With Spaces/Harnessing_Uncertainty"
     assert cmd[-len(argv):] == argv
+
+
+def test_default_is_single_seed_overnight_with_deadline(monkeypatch, tmp_path):
+    prepare(monkeypatch, tmp_path)
+    commands = []
+
+    def execute(cmd):
+        commands.append(cmd)
+        (tmp_path / "runs/overnight").mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(runner, "execute", execute)
+    assert runner.main([]) == 0
+    suite = commands[0]
+    assert suite[suite.index("--seeds") + 1:suite.index("--max-seconds")] == ["0"]
+    assert float(suite[suite.index("--max-seconds") + 1]) == 8 * 3600
+    manifest = json.loads((tmp_path / "results/overnight/benchmark_run.json").read_text())
+    assert manifest["seeds"] == [0]
+    assert len(manifest["configs"]) == 4
+    for cfg in manifest["configs"]:
+        assert cfg["train"]["max_steps"] == cfg["eval"]["max_steps"] == 50
+        assert cfg["train"]["max_seconds"] == 2400
+        assert cfg["policy"]["max_new_tokens"] == 256
+        assert cfg["eval"]["max_tasks"] == 24
+        assert cfg["eval"]["split"] == "valid_seen"
+
+
+def test_deadline_generates_partial_tables_and_returns_124(monkeypatch, tmp_path):
+    prepare(monkeypatch, tmp_path)
+    (tmp_path / "runs/overnight").mkdir(parents=True)
+    commands = []
+
+    def execute(cmd):
+        commands.append(cmd)
+        if "benchmarks.suite" in cmd:
+            raise subprocess.CalledProcessError(124, cmd)
+
+    monkeypatch.setattr(runner, "execute", execute)
+    assert runner.main([]) == 124
+    assert "benchmarks.report" in commands[-1]
+    manifest = json.loads((tmp_path / "results/overnight/benchmark_run.json").read_text())
+    assert manifest["status"] == "deadline_reached"
+    assert manifest["report_status"] == "complete"
