@@ -68,21 +68,27 @@ def estimate(cfg, *, train=True, evaluate=True):
     """Workload extrapolation, not a statistical interval or effectiveness claim.
 
     RTX 5060 Laptop 8GB, Qwen2.5-1.5B LoRA/HF, chunked head, four CPU workers:
-    24 real response steps: generation 19.65s, warm update 15.90s, mean 112.6 tokens.
-    16 distinct environments: warm reset 12.72s, 80 scripted steps 2.51s.
-    See docs/research_audit.md. Short profiles cannot capture long-context costs.
+    Expanded-batch probe: 80 response steps, generation 50.62s, update 51.08s,
+    mean 92.45 tokens; 16 trajectories on four distinct games. Generation scales
+    conservatively between this probe and the completed four-trajectory run
+    (1.05s/step). Evaluation uses the completed overnight suite's ~0.65s/step
+    generation cost at 24 environments. See docs/overnight_full.md and
+    runs/audit/overnight_full_profile.json. These are workload extrapolations.
     """
-    tokens = max(0.1, min(1., cfg.policy.max_new_tokens / 112.6))
+    tokens = max(0.1, min(1., cfg.policy.max_new_tokens / 92.45))
     if cfg.policy.max_new_tokens > 256:
         tokens *= cfg.policy.max_new_tokens / 256
     workers = int(cfg.env.get("workers", 0))
     env_scale = 1. if workers >= 4 else (2.82 if workers <= 1 else 4. / workers)
     episodes = cfg.train.games_per_iter * cfg.train.group_size
     steps = episodes * cfg.train.max_steps
-    update_rate = 15.90 / 24 * cfg.train.ppo_epochs
+    # gen_batch_size is a ceiling: it cannot fill missing trajectory slots.
+    active_batch = min(episodes, cfg.policy.gen_batch_size, 16)
+    generation_rate = (50.616117672 / 80) * (16 / max(1, active_batch)) ** .365
+    update_rate = 51.082308316 / 80 * cfg.train.ppo_epochs
     if not cfg.policy.chunked_head:
         update_rate = 43.61 / 24 * cfg.train.ppo_epochs
-    batch_seconds = (steps * ((19.65 / 24 + update_rate) * tokens + 2.51 / 80 * env_scale)
+    batch_seconds = (steps * ((generation_rate + update_rate) * tokens + 2.51 / 80 * env_scale)
                      + episodes * 12.72 / 16 * env_scale)
     batches = cfg.train.iterations
     if cfg.train.max_env_steps:
@@ -101,9 +107,17 @@ def estimate(cfg, *, train=True, evaluate=True):
         finally:
             if hasattr(bench, "close"):
                 bench.close()
-    eval_steps = task_count * cfg.eval.max_steps if evaluate else 0
-    evaluation = (eval_steps * (19.65 / 24 * tokens + 2.51 / 80 * env_scale)
-                  + task_count * 12.72 / 16 * env_scale) if evaluate else 0.
+    evaluation = 0.
+    if evaluate:
+        # Account for the partially filled final environment/generation batch.
+        for start in range(0, task_count, cfg.eval.batch_envs):
+            chunk = min(cfg.eval.batch_envs, task_count - start)
+            for offset in range(0, chunk, cfg.policy.gen_batch_size):
+                n = min(cfg.policy.gen_batch_size, chunk - offset)
+                rate = .65 * (24 / min(n, 32)) ** .5
+                evaluation += n * cfg.eval.max_steps * (
+                    rate * tokens + 2.51 / 80 * env_scale)
+        evaluation += task_count * 12.72 / 16 * env_scale
     central = training + evaluation + 30 * (int(train) + int(evaluate))
     return {"seconds": central, "low_seconds": central * .5, "high_seconds": central * 1.5,
             "training_seconds": training, "evaluation_seconds": evaluation,
@@ -124,13 +138,13 @@ def main(argv=None):
     from benchmarks.suite import _finished, _matching_eval
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--tier", choices=tiers(), default="overnight")
+    ap.add_argument("--tier", choices=tiers(), default="overnight_full")
     ap.add_argument("--arms", nargs="+", choices=list(arms()),
                     help="override the uncommented ENABLED_METHODS lines at the top of this file")
     ap.add_argument("--seeds", nargs="+", type=int,
-                    help="default: 0 for overnight/pilot/small/smoke; 0 1 2 for full/reduced")
+                    help="default: 0 for overnight_full/overnight/pilot/small/smoke; 0 1 2 for full/reduced")
     ap.add_argument("--hours", type=float,
-                    help="training/evaluation wall-clock deadline; default 8 for overnight, 0 (unlimited) otherwise")
+                    help="training/evaluation deadline; default 8.5 for overnight_full, 8 for overnight, 0 (unlimited) otherwise")
     ap.add_argument("--runs", help="run directory (default runs/<tier>)")
     ap.add_argument("--out", help="report directory (default results/<tier>)")
     ap.add_argument("--baseline", default="grpo", choices=list(arms()))
@@ -143,7 +157,7 @@ def main(argv=None):
     if args.seeds is None:
         args.seeds = [0, 1, 2] if args.tier in ("full", "reduced") else [0]
     if args.hours is None:
-        args.hours = 8. if args.tier == "overnight" else 0.
+        args.hours = {"overnight_full": 8.5, "overnight": 8.}.get(args.tier, 0.)
     if not math.isfinite(args.hours) or args.hours < 0:
         ap.error("--hours must be finite and nonnegative (0 disables the deadline)")
     if args.arms is None:
@@ -195,12 +209,22 @@ def main(argv=None):
     if args.hours:
         print(f"Training/evaluation deadline: {args.hours:g} hours, then cleanup and reports. "
               "If reached, unfinished methods remain explicitly incomplete.", flush=True)
-        if totals["high_seconds"] > args.hours * 3600:
-            print("The estimate exceeds the deadline; select fewer methods/seeds or allow more hours to finish all runs.")
-    print("Calibration: RTX 5060 Laptop 8GB, Qwen2.5-1.5B LoRA, HF, four workers. "
+        if totals["seconds"] > args.hours * 3600:
+            print("The central estimate exceeds the deadline; allow more hours or reduce the workload to finish all runs.")
+        elif totals["high_seconds"] > args.hours * 3600:
+            print("Slower runs can reach the deadline; completed results are preserved and unfinished runs are marked incomplete.")
+    print("Calibration: RTX 5060 Laptop 8GB, Qwen2.5-1.5B LoRA, HF, four workers; "
+          "real 16-trajectory probe and completed overnight run. "
           "Range models early finishes / timing variation; it is not a measured confidence interval. "
           "Longer prompts, response lengths, other models/backends or hardware can exceed it.")
     print(f"Runs: {runs.resolve()}\nReports: {out.resolve()}", flush=True)
+    if args.tier == "overnight_full":
+        cfg = configs[0]
+        print(f"Expanded plan per method/seed: {cfg.train.iterations} batches x "
+              f"{cfg.train.games_per_iter} games x {cfg.train.group_size} siblings; "
+              f"up to {cfg.train.iterations * cfg.train.mini_batches * cfg.train.ppo_epochs} optimizer steps; "
+              f"{cfg.eval.max_tasks or 'all'} "
+              "evaluation tasks. Fixed workload across methods; runtime can vary.", flush=True)
     if args.estimate_only:
         return 0
 
@@ -214,7 +238,7 @@ def main(argv=None):
                 "status": "running"}
     manifest_path = out / "benchmark_run.json"
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    suite_cmd = [sys.executable, "-m", "benchmarks.suite", "--tier", args.tier,
+    suite_cmd = [sys.executable, "-u", "-m", "benchmarks.suite", "--tier", args.tier,
                  "--arms", *args.arms, "--seeds", *map(str, args.seeds)]
     if args.skip_base:
         suite_cmd.append("--skip-base")

@@ -29,6 +29,8 @@ class TrainConfig:
     lr: float = 1e-5
     weight_decay: float = 0.0
     kl_coef: float = 0.01
+    entropy_coef: float = 0.0    # differentiable entropy bonus; distinct from EMPG's detached H_t
+    reward_mode: str = "trajectory"  # legacy episode penalties | verl step scores/group normalization
     clip_low: float = 0.2
     clip_high: float = 0.2       # > clip_low gives DAPO's clip-higher
     ppo_epochs: int = 1
@@ -45,6 +47,7 @@ class EvalConfig:
     max_tasks: int = 0           # 0 = all
     max_steps: int = 50
     greedy: bool = True
+    temperature: float | None = None  # stochastic eval override; None preserves policy temperature
     batch_envs: int = 32
     selection: str = "random"   # random | stratified (proportional task-type allocation)
     selection_seed: int = 0     # independent of training seed, shared by all arms
@@ -67,8 +70,32 @@ class Config:
         return Path(self.out_dir) / f"{self.name}_s{self.seed}"
 
 
+def _optional_defaults(data: dict) -> dict:
+    """Keep legacy artifact fingerprints valid when new options are disabled."""
+    result = dict(data)
+    for section, defaults in {
+        "train": {"entropy_coef": 0.0, "reward_mode": "trajectory"},
+        "policy": {"amp": False, "vllm_max_num_seqs": 256},
+        "eval": {"temperature": None},
+    }.items():
+        if section in result:
+            result[section] = dict(result[section])
+            for key, default in defaults.items():
+                if result[section].get(key) == default:
+                    result[section].pop(key, None)
+    return result
+
+
+def config_dict(cfg: Config) -> dict:
+    return _optional_defaults(dataclasses.asdict(cfg))
+
+
+def config_matches(saved: dict, cfg: Config) -> bool:
+    return _optional_defaults(saved) == config_dict(cfg)
+
+
 def config_fingerprint(cfg: Config) -> str:
-    return hashlib.sha256(json.dumps(dataclasses.asdict(cfg), sort_keys=True).encode()).hexdigest()
+    return hashlib.sha256(json.dumps(config_dict(cfg), sort_keys=True).encode()).hexdigest()
 
 
 def _read_yaml(path: Path) -> dict:

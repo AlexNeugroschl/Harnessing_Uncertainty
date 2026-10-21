@@ -1,0 +1,8 @@
+# Same corrected local protocol as paper_lora, using the measured compiled backend.
+# Requires ~/venvs/empg-vllm (see docs/paper_fidelity_review.md).
+inherit: paper_lora.yaml
+out_dir: runs/paper_lora_fast
+policy:
+  backend: vllm
+  vllm_enforce_eager: false
+  vllm_max_num_seqs: 32

@@ -16,7 +16,7 @@ import os
 import re
 from pathlib import Path
 
-from empg.prompts import alfworld_prompt, visited_locations
+from empg.prompts import alfworld_prompt, parse_action, visited_locations
 
 SPLITS = {"train": "train", "valid_seen": "valid_seen", "valid_unseen": "valid_unseen"}
 TASK_TYPES = {  # ALFWorld dir prefix -> paper's subtask column
@@ -190,10 +190,13 @@ class ALFWorldBenchmark:
     name = "alfworld"
 
     def __init__(self, data_dir: str | None = None, history_length: int = 2,
-                 memory: bool = False, workers: int = 0):
+                 memory: bool = False, workers: int = 0, action_parser: str = "strict"):
         self.data_dir = data_dir
         self.history_length = history_length
         self.memory = memory  # list visited locations in the prompt (H6 baseline)
+        if action_parser not in ("strict", "verl"):
+            raise ValueError("action_parser must be 'strict' or 'verl'")
+        self.action_parser = action_parser
         if workers < 0:
             raise ValueError("env.workers must be nonnegative")
         self.workers = workers
@@ -229,3 +232,6 @@ class ALFWorldBenchmark:
         visited = visited_locations(history, observation) if self.memory else None
         return alfworld_prompt(task_desc, observation, admissible, history, self.history_length,
                                visited=visited)
+
+    def parse_action(self, response):
+        return parse_action(response, mode=self.action_parser)

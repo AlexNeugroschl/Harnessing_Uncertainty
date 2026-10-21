@@ -135,16 +135,20 @@ def test_merged_generation_matches_and_restores_weights(policy):
 
 
 @pytest.mark.parametrize("method,curiosity", [("grpo", 0.0), ("empg", 0.0), ("empg", 0.1)])
-def test_one_update(policy, method, curiosity):
+@pytest.mark.parametrize("reward_mode", ["trajectory", "step"])
+def test_one_update(policy, method, curiosity, reward_mode):
     pol, cfg = policy
     cfg.advantage.method = method
     cfg.advantage.curiosity.weight = curiosity  # FakeEnv has no state keys -> "obs" fallback
     cfg.train.mini_batches = 2
+    cfg.train.reward_mode = reward_mode
+    cfg.train.entropy_coef = .001 if reward_mode == "step" else 0.
     torch.manual_seed(0)
     trajs = run_episodes(pol, FakeBench(), ["open the door"] * 4, [0, 0, 1, 1], max_steps=3)
     assert all(1 <= len(t.steps) <= 3 for t in trajs)
     # Force a mixed-outcome group so GRPO has signal too.
     trajs[0].reward, trajs[1].reward = 10.0, 0.0
+    trajs[0].won = True
 
     before = [p.detach().clone() for p in pol.parameters()]
     stats = update(pol, torch.optim.AdamW(pol.parameters(), lr=1e-3), trajs, cfg,

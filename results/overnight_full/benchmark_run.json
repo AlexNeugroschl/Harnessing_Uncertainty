@@ -1,0 +1,414 @@
+{
+  "started_utc": "2026-10-21T04:36:32.072485+00:00",
+  "tier": "overnight_full",
+  "hours": 8.5,
+  "arms": [
+    "grpo",
+    "empg",
+    "grpo_cur_group",
+    "empg_cur_episodic"
+  ],
+  "seeds": [
+    0
+  ],
+  "baseline": "grpo",
+  "runs": "/mnt/c/Users/alexn/Documents/Resume Projects/Harnessing_Uncertainty/runs/overnight_full",
+  "split": "valid_seen",
+  "remaining_estimates": [
+    {
+      "arm": "base",
+      "seed": null,
+      "seconds": 1680.9937530594425,
+      "low_seconds": 840.4968765297212,
+      "high_seconds": 2521.4906295891637,
+      "training_seconds": 0.0,
+      "evaluation_seconds": 1650.9937530594425,
+      "eval_tasks": 48,
+      "training_steps_at_caps": 0
+    },
+    {
+      "arm": "grpo",
+      "seed": 0,
+      "seconds": 6985.015052459443,
+      "low_seconds": 3492.5075262297214,
+      "high_seconds": 10477.522578689164,
+      "training_seconds": 5274.0212994,
+      "evaluation_seconds": 1650.9937530594425,
+      "eval_tasks": 48,
+      "training_steps_at_caps": 4000
+    },
+    {
+      "arm": "empg",
+      "seed": 0,
+      "seconds": 6985.015052459443,
+      "low_seconds": 3492.5075262297214,
+      "high_seconds": 10477.522578689164,
+      "training_seconds": 5274.0212994,
+      "evaluation_seconds": 1650.9937530594425,
+      "eval_tasks": 48,
+      "training_steps_at_caps": 4000
+    },
+    {
+      "arm": "grpo_cur_group",
+      "seed": 0,
+      "seconds": 6985.015052459443,
+      "low_seconds": 3492.5075262297214,
+      "high_seconds": 10477.522578689164,
+      "training_seconds": 5274.0212994,
+      "evaluation_seconds": 1650.9937530594425,
+      "eval_tasks": 48,
+      "training_steps_at_caps": 4000
+    },
+    {
+      "arm": "empg_cur_episodic",
+      "seed": 0,
+      "seconds": 6985.015052459443,
+      "low_seconds": 3492.5075262297214,
+      "high_seconds": 10477.522578689164,
+      "training_seconds": 5274.0212994,
+      "evaluation_seconds": 1650.9937530594425,
+      "eval_tasks": 48,
+      "training_steps_at_caps": 4000
+    }
+  ],
+  "estimate": {
+    "seconds": 29666.053962897215,
+    "low_seconds": 14833.026981448607,
+    "high_seconds": 44499.08094434582
+  },
+  "configs": [
+    {
+      "name": "grpo",
+      "seed": 0,
+      "out_dir": "runs/overnight_full",
+      "benchmark": "alfworld",
+      "env": {
+        "history_length": 2,
+        "memory": false,
+        "workers": 4
+      },
+      "policy": {
+        "model_name": "Qwen/Qwen2.5-1.5B-Instruct",
+        "dtype": "bfloat16",
+        "lora_r": 16,
+        "lora_alpha": 32,
+        "lora_dropout": 0.0,
+        "lora_targets": [
+          "all-linear"
+        ],
+        "gradient_checkpointing": true,
+        "max_new_tokens": 256,
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "gen_batch_size": 32,
+        "micro_batch_size": 2,
+        "head_chunk_size": 128,
+        "chunked_head": true,
+        "backend": "hf",
+        "merge_lora": true,
+        "vllm_gpu_memory_utilization": 0.8,
+        "vllm_max_model_len": 8192,
+        "vllm_enforce_eager": true
+      },
+      "advantage": {
+        "method": "grpo",
+        "use_g": true,
+        "use_f": true,
+        "k": 1.0,
+        "k_prime": 1.0,
+        "zeta": 0.05,
+        "curiosity": {
+          "weight": 0.0,
+          "key": "parsed",
+          "scope": "episodic",
+          "bonus": "inv_sqrt",
+          "mode": "step",
+          "schedule": "constant",
+          "decay_iters": 0,
+          "gate": "none",
+          "modulate": "none",
+          "cap": 0.0
+        }
+      },
+      "train": {
+        "iterations": 5,
+        "games_per_iter": 4,
+        "group_size": 4,
+        "max_steps": 50,
+        "success_reward": 10.0,
+        "invalid_penalty": 0.1,
+        "lr": 1e-05,
+        "weight_decay": 0.0,
+        "kl_coef": 0.01,
+        "clip_low": 0.2,
+        "clip_high": 0.2,
+        "ppo_epochs": 1,
+        "mini_batches": 8,
+        "max_grad_norm": 1.0,
+        "save_every": 0,
+        "max_env_steps": 0,
+        "max_seconds": 0
+      },
+      "eval": {
+        "split": "valid_seen",
+        "max_tasks": 48,
+        "max_steps": 50,
+        "greedy": true,
+        "batch_envs": 32,
+        "selection": "stratified",
+        "selection_seed": 0
+      }
+    },
+    {
+      "name": "empg",
+      "seed": 0,
+      "out_dir": "runs/overnight_full",
+      "benchmark": "alfworld",
+      "env": {
+        "history_length": 2,
+        "memory": false,
+        "workers": 4
+      },
+      "policy": {
+        "model_name": "Qwen/Qwen2.5-1.5B-Instruct",
+        "dtype": "bfloat16",
+        "lora_r": 16,
+        "lora_alpha": 32,
+        "lora_dropout": 0.0,
+        "lora_targets": [
+          "all-linear"
+        ],
+        "gradient_checkpointing": true,
+        "max_new_tokens": 256,
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "gen_batch_size": 32,
+        "micro_batch_size": 2,
+        "head_chunk_size": 128,
+        "chunked_head": true,
+        "backend": "hf",
+        "merge_lora": true,
+        "vllm_gpu_memory_utilization": 0.8,
+        "vllm_max_model_len": 8192,
+        "vllm_enforce_eager": true
+      },
+      "advantage": {
+        "method": "empg",
+        "use_g": true,
+        "use_f": true,
+        "k": 1.0,
+        "k_prime": 1.0,
+        "zeta": 0.05,
+        "curiosity": {
+          "weight": 0.0,
+          "key": "parsed",
+          "scope": "episodic",
+          "bonus": "inv_sqrt",
+          "mode": "step",
+          "schedule": "constant",
+          "decay_iters": 0,
+          "gate": "none",
+          "modulate": "none",
+          "cap": 0.0
+        }
+      },
+      "train": {
+        "iterations": 5,
+        "games_per_iter": 4,
+        "group_size": 4,
+        "max_steps": 50,
+        "success_reward": 10.0,
+        "invalid_penalty": 0.1,
+        "lr": 1e-05,
+        "weight_decay": 0.0,
+        "kl_coef": 0.01,
+        "clip_low": 0.2,
+        "clip_high": 0.2,
+        "ppo_epochs": 1,
+        "mini_batches": 8,
+        "max_grad_norm": 1.0,
+        "save_every": 0,
+        "max_env_steps": 0,
+        "max_seconds": 0
+      },
+      "eval": {
+        "split": "valid_seen",
+        "max_tasks": 48,
+        "max_steps": 50,
+        "greedy": true,
+        "batch_envs": 32,
+        "selection": "stratified",
+        "selection_seed": 0
+      }
+    },
+    {
+      "name": "grpo_cur_group",
+      "seed": 0,
+      "out_dir": "runs/overnight_full",
+      "benchmark": "alfworld",
+      "env": {
+        "history_length": 2,
+        "memory": false,
+        "workers": 4
+      },
+      "policy": {
+        "model_name": "Qwen/Qwen2.5-1.5B-Instruct",
+        "dtype": "bfloat16",
+        "lora_r": 16,
+        "lora_alpha": 32,
+        "lora_dropout": 0.0,
+        "lora_targets": [
+          "all-linear"
+        ],
+        "gradient_checkpointing": true,
+        "max_new_tokens": 256,
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "gen_batch_size": 32,
+        "micro_batch_size": 2,
+        "head_chunk_size": 128,
+        "chunked_head": true,
+        "backend": "hf",
+        "merge_lora": true,
+        "vllm_gpu_memory_utilization": 0.8,
+        "vllm_max_model_len": 8192,
+        "vllm_enforce_eager": true
+      },
+      "advantage": {
+        "method": "grpo",
+        "use_g": true,
+        "use_f": true,
+        "k": 1.0,
+        "k_prime": 1.0,
+        "zeta": 0.05,
+        "curiosity": {
+          "weight": 0.05,
+          "key": "parsed",
+          "scope": "group",
+          "bonus": "inv_sqrt",
+          "mode": "step",
+          "schedule": "constant",
+          "decay_iters": 0,
+          "gate": "none",
+          "modulate": "none",
+          "cap": 0.0
+        }
+      },
+      "train": {
+        "iterations": 5,
+        "games_per_iter": 4,
+        "group_size": 4,
+        "max_steps": 50,
+        "success_reward": 10.0,
+        "invalid_penalty": 0.1,
+        "lr": 1e-05,
+        "weight_decay": 0.0,
+        "kl_coef": 0.01,
+        "clip_low": 0.2,
+        "clip_high": 0.2,
+        "ppo_epochs": 1,
+        "mini_batches": 8,
+        "max_grad_norm": 1.0,
+        "save_every": 0,
+        "max_env_steps": 0,
+        "max_seconds": 0
+      },
+      "eval": {
+        "split": "valid_seen",
+        "max_tasks": 48,
+        "max_steps": 50,
+        "greedy": true,
+        "batch_envs": 32,
+        "selection": "stratified",
+        "selection_seed": 0
+      }
+    },
+    {
+      "name": "empg_cur_episodic",
+      "seed": 0,
+      "out_dir": "runs/overnight_full",
+      "benchmark": "alfworld",
+      "env": {
+        "history_length": 2,
+        "memory": false,
+        "workers": 4
+      },
+      "policy": {
+        "model_name": "Qwen/Qwen2.5-1.5B-Instruct",
+        "dtype": "bfloat16",
+        "lora_r": 16,
+        "lora_alpha": 32,
+        "lora_dropout": 0.0,
+        "lora_targets": [
+          "all-linear"
+        ],
+        "gradient_checkpointing": true,
+        "max_new_tokens": 256,
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "gen_batch_size": 32,
+        "micro_batch_size": 2,
+        "head_chunk_size": 128,
+        "chunked_head": true,
+        "backend": "hf",
+        "merge_lora": true,
+        "vllm_gpu_memory_utilization": 0.8,
+        "vllm_max_model_len": 8192,
+        "vllm_enforce_eager": true
+      },
+      "advantage": {
+        "method": "empg",
+        "use_g": true,
+        "use_f": true,
+        "k": 1.0,
+        "k_prime": 1.0,
+        "zeta": 0.05,
+        "curiosity": {
+          "weight": 0.05,
+          "key": "parsed",
+          "scope": "episodic",
+          "bonus": "inv_sqrt",
+          "mode": "step",
+          "schedule": "constant",
+          "decay_iters": 0,
+          "gate": "none",
+          "modulate": "none",
+          "cap": 0.0
+        }
+      },
+      "train": {
+        "iterations": 5,
+        "games_per_iter": 4,
+        "group_size": 4,
+        "max_steps": 50,
+        "success_reward": 10.0,
+        "invalid_penalty": 0.1,
+        "lr": 1e-05,
+        "weight_decay": 0.0,
+        "kl_coef": 0.01,
+        "clip_low": 0.2,
+        "clip_high": 0.2,
+        "ppo_epochs": 1,
+        "mini_batches": 8,
+        "max_grad_norm": 1.0,
+        "save_every": 0,
+        "max_env_steps": 0,
+        "max_seconds": 0
+      },
+      "eval": {
+        "split": "valid_seen",
+        "max_tasks": 48,
+        "max_steps": 50,
+        "greedy": true,
+        "batch_envs": 32,
+        "selection": "stratified",
+        "selection_seed": 0
+      }
+    }
+  ],
+  "status": "complete",
+  "suite_seconds": 27031.182592424,
+  "report_status": "complete",
+  "elapsed_seconds": 27032.68048595,
+  "finished_utc": "2026-10-21T12:07:03.106101+00:00"
+}

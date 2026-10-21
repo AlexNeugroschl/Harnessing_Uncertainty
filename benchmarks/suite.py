@@ -11,7 +11,6 @@ Each run is a subprocess so GPU memory is fully released between runs.
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import json
 import math
 import subprocess
@@ -21,7 +20,7 @@ import time
 from benchmarks.common import BASE, arms, load, tiers
 from benchmarks.evaluate import eval_path
 from benchmarks.process import run_process
-from empg.config import config_fingerprint
+from empg.config import config_fingerprint, config_matches
 
 # Named arm sets from docs/curiosity_research_plan.md.
 PHASES = {
@@ -32,7 +31,7 @@ PHASES = {
 
 
 def run(module: str, config: str, tier, seed: int, overrides: list[str], *extra: str, deadline=None):
-    cmd = [sys.executable, "-m", module, "--config", str(config), "--seed", str(seed),
+    cmd = [sys.executable, "-u", "-m", module, "--config", str(config), "--seed", str(seed),
            *(["--tier", tier] if tier else []), *extra, *overrides]
     print("$", " ".join(cmd), flush=True)
     timeout = max(0., deadline - time.monotonic()) if deadline is not None else None
@@ -85,7 +84,7 @@ def run_suite(args, selected, deadline=None):
 
 def _finished(cfg) -> bool:
     saved = cfg.run_dir / "config.json"
-    if saved.exists() and json.loads(saved.read_text()) != dataclasses.asdict(cfg):
+    if saved.exists() and not config_matches(json.loads(saved.read_text()), cfg):
         raise ValueError(f"{cfg.run_dir} contains a different configuration. "
                          "Choose a new name= or out_dir= to preserve that experiment.")
     completed = cfg.run_dir / "training_complete.json"

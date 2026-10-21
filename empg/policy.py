@@ -44,6 +44,7 @@ class PolicyConfig:
     lora_dropout: float = 0.0
     lora_targets: list[str] = field(default_factory=lambda: ["all-linear"])
     gradient_checkpointing: bool = True
+    amp: bool = False           # CUDA bf16 autocast; retains FP32 LoRA master parameters
     max_new_tokens: int = 256
     temperature: float = 1.0
     top_p: float = 1.0
@@ -55,8 +56,9 @@ class PolicyConfig:
     merge_lora: bool = True      # hf: merge LoRA into the weights while generating
     vllm_gpu_memory_utilization: float = 0.8  # share of VRAM vLLM may take (HF model is on CPU then)
     vllm_max_model_len: int = 8192
-    # No CUDA graphs: asleep, vLLM then keeps ~1.2 GiB instead of ~2.3 GiB, which on an
-    # 8GB card is what lets the update fit. Rollouts are env-bound, so it costs ~nothing.
+    vllm_max_num_seqs: int = 256  # legacy engine limit; use 32 for the local fast preset
+    # Eager mode preserves the old memory profile. The fast preset bounds graph
+    # capture to the actual batch size; generation, not env stepping, dominates.
     vllm_enforce_eager: bool = True
 
 
@@ -228,7 +230,8 @@ class LLMPolicy:
             lora = dict(enable_lora=True, max_lora_rank=rank, max_loras=1)
         return LLM(model=c.model_name, dtype=c.dtype, seed=self.seed,
                    gpu_memory_utilization=c.vllm_gpu_memory_utilization,
-                   max_model_len=c.vllm_max_model_len, enforce_eager=c.vllm_enforce_eager,
+                   max_model_len=c.vllm_max_model_len, max_num_seqs=c.vllm_max_num_seqs,
+                   enforce_eager=c.vllm_enforce_eager,
                    enable_prefix_caching=True, enable_sleep_mode=True, **lora)
 
     def _vllm_generate(self, prompts: list[str], greedy: bool):
@@ -278,6 +281,14 @@ class LLMPolicy:
         Returns padded tensors [B, R] plus a response mask. Gradients flow unless
         the caller wraps this in no_grad.
         """
+        enabled = self.cfg.amp and torch.device(self.device).type == "cuda"
+        if enabled and self.cfg.dtype != "bfloat16":
+            raise ValueError("policy.amp currently requires policy.dtype=bfloat16")
+        ctx = torch.autocast("cuda", dtype=torch.bfloat16) if enabled else _null()
+        with ctx:
+            return self._forward_logprobs(prompt_ids, response_ids, with_entropy)
+
+    def _forward_logprobs(self, prompt_ids, response_ids, with_entropy=False):
         seqs = [p + r for p, r in zip(prompt_ids, response_ids)]
         pad = self.tokenizer.pad_token_id
         batch = self._left_pad(seqs, pad)

@@ -28,6 +28,7 @@ Once you've finished your reasoning, you should choose an admissible action for 
 
 _ACTION_RE = re.compile(r"<action>(.*?)</action>", re.DOTALL | re.IGNORECASE)
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 
 
 def visited_locations(history: list[tuple[str, str]], observation: str) -> list[str]:
@@ -71,12 +72,25 @@ def alfworld_prompt(task: str, observation: str, admissible: list[str],
     )
 
 
-def parse_action(response: str) -> tuple[str, bool]:
+def parse_action(response: str, mode: str = "strict") -> tuple[str, bool]:
     """Return (action, valid). Valid means one <think> block and one <action> block.
 
     Invalid responses still yield a best-effort action string (the env answers
     "Nothing happens."), and the step incurs the invalid-action penalty.
     """
+    if mode == "verl":
+        # Behavior of the Apache-2.0 Verl-Agent ALFWorld projection, pinned to
+        # 29e3e8b3e3412aff53b1e4a461dac77a8eec19bd (2025-09-03).
+        lowered = response.lower()
+        start, end = lowered.find("<action>"), lowered.find("</action>")
+        if start < 0 or end < 0:
+            return lowered[-30:], False
+        action = lowered[start + len("<action>"):end].strip()
+        valid = ("<think>" in response and "</think>" in response
+                 and _CJK_RE.search(response) is None)
+        return action, valid
+    if mode != "strict":
+        raise ValueError("action parser must be 'strict' or 'verl'")
     actions = _ACTION_RE.findall(response)
     valid = len(actions) == 1 and _THINK_RE.search(response) is not None
     if actions:

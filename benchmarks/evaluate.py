@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 from contextlib import ExitStack
 from collections import defaultdict
@@ -52,6 +53,9 @@ def select_tasks(tasks, bench, ec):
 
 def evaluate(policy: LLMPolicy, cfg: Config, log=print) -> tuple[dict, dict]:
     ec = cfg.eval
+    if not ec.greedy and ec.temperature is not None and (
+            not np.isfinite(ec.temperature) or ec.temperature <= 0):
+        raise ValueError("stochastic eval.temperature must be finite and positive")
     bench = make_benchmark(cfg.benchmark, **cfg.env)
     tasks = select_tasks(bench.tasks(ec.split), bench, ec)
     if not tasks:
@@ -59,14 +63,21 @@ def evaluate(policy: LLMPolicy, cfg: Config, log=print) -> tuple[dict, dict]:
     by_type = defaultdict(list)
     per_task = []
     lengths = {"len": [], "truncated": [], "valid": []}
-    with ExitStack() as cleanup, policy.generation():  # one session for all chunks
+    with ExitStack() as cleanup:
         if hasattr(bench, "close"):
             cleanup.callback(bench.close)
+        if not ec.greedy and ec.temperature is not None:
+            original = policy.cfg
+            policy.cfg = dataclasses.replace(original, temperature=ec.temperature)
+            cleanup.callback(setattr, policy, "cfg", original)
+        cleanup.enter_context(policy.generation())  # one session for all chunks
         for s in range(0, len(tasks), ec.batch_envs):
             chunk = tasks[s:s + ec.batch_envs]
+            log(f"  eval tasks {s + 1}-{s + len(chunk)}/{len(tasks)} starting")
             trajs = run_episodes(policy, bench, chunk, list(range(len(chunk))), ec.max_steps,
                                  cfg.train.success_reward, cfg.train.invalid_penalty,
-                                 greedy=ec.greedy)
+                                 greedy=ec.greedy, progress=lambda turn, active: log(
+                                     f"    turn {turn}/{ec.max_steps}, {active} active"))
             for tr in trajs:
                 by_type[bench.task_type(tr.task)].append(tr.won)
                 per_task.append({"task": tr.task, "type": bench.task_type(tr.task),
@@ -84,6 +95,10 @@ def evaluate(policy: LLMPolicy, cfg: Config, log=print) -> tuple[dict, dict]:
                          "max_new_tokens": cfg.policy.max_new_tokens,
                          "selection": ec.selection, "selection_seed": ec.selection_seed,
                          "history_length": cfg.env.get("history_length", 2)})
+    if not ec.greedy and ec.temperature is not None:
+        res["protocol"]["temperature"] = ec.temperature
+    if cfg.env.get("action_parser", "strict") != "strict":
+        res["protocol"]["action_parser"] = cfg.env["action_parser"]
     return res, {"cap": policy.cfg.max_new_tokens, **lengths}
 
 

@@ -109,33 +109,65 @@ def test_windows_forwarding_keeps_spaces_and_overrides_as_arguments(monkeypatch)
     assert cmd[-len(argv):] == argv
 
 
-def test_default_is_single_seed_overnight_with_deadline(monkeypatch, tmp_path):
+def test_default_is_expanded_single_seed_overnight_with_deadline(monkeypatch, tmp_path):
     prepare(monkeypatch, tmp_path)
     commands = []
 
     def execute(cmd):
         commands.append(cmd)
-        (tmp_path / "runs/overnight").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "runs/overnight_full").mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(runner, "execute", execute)
     assert runner.main([]) == 0
     suite = commands[0]
+    assert suite[suite.index("--tier") + 1] == "overnight_full"
     assert suite[suite.index("--seeds") + 1:suite.index("--max-seconds")] == ["0"]
-    assert float(suite[suite.index("--max-seconds") + 1]) == 8 * 3600
-    manifest = json.loads((tmp_path / "results/overnight/benchmark_run.json").read_text())
+    assert float(suite[suite.index("--max-seconds") + 1]) == 8.5 * 3600
+    manifest = json.loads((tmp_path / "results/overnight_full/benchmark_run.json").read_text())
     assert manifest["seeds"] == [0]
+    assert manifest["hours"] == 8.5
+    assert manifest["arms"] == ["grpo", "empg", "grpo_cur_group", "empg_cur_episodic"]
     assert len(manifest["configs"]) == 4
     for cfg in manifest["configs"]:
         assert cfg["train"]["max_steps"] == cfg["eval"]["max_steps"] == 50
-        assert cfg["train"]["max_seconds"] == 2400
+        assert cfg["train"]["max_seconds"] == 0
+        assert cfg["train"]["iterations"] == 5
+        assert cfg["train"]["games_per_iter"] == cfg["train"]["group_size"] == 4
+        assert cfg["train"]["mini_batches"] == 8
         assert cfg["policy"]["max_new_tokens"] == 256
-        assert cfg["eval"]["max_tasks"] == 24
+        assert cfg["eval"]["max_tasks"] == 48
         assert cfg["eval"]["split"] == "valid_seen"
+        assert cfg["out_dir"] == "runs/overnight_full"
+    assert not (tmp_path / "results/overnight").exists()
+
+
+def test_original_overnight_preset_remains_available(monkeypatch, tmp_path):
+    prepare(monkeypatch, tmp_path)
+    commands = []
+    monkeypatch.setattr(runner, "execute", commands.append)
+    assert runner.main(["--tier", "overnight"]) == 0
+    manifest = json.loads((tmp_path / "results/overnight/benchmark_run.json").read_text())
+    assert manifest["hours"] == 8
+    assert all(c["train"]["max_seconds"] == 2400 and c["eval"]["max_tasks"] == 24
+               for c in manifest["configs"])
+
+
+def test_strict_eight_hour_override_preserves_the_expanded_workload(monkeypatch, tmp_path):
+    prepare(monkeypatch, tmp_path)
+    commands = []
+    monkeypatch.setattr(runner, "execute", commands.append)
+    assert runner.main(["--hours", "8"]) == 0
+    suite = commands[0]
+    assert float(suite[suite.index("--max-seconds") + 1]) == 8 * 3600
+    manifest = json.loads((tmp_path / "results/overnight_full/benchmark_run.json").read_text())
+    assert manifest["hours"] == 8
+    assert all(c["train"]["iterations"] == 5 and c["eval"]["max_tasks"] == 48
+               for c in manifest["configs"])
 
 
 def test_deadline_generates_partial_tables_and_returns_124(monkeypatch, tmp_path):
     prepare(monkeypatch, tmp_path)
-    (tmp_path / "runs/overnight").mkdir(parents=True)
+    (tmp_path / "runs/overnight_full").mkdir(parents=True)
     commands = []
 
     def execute(cmd):
@@ -146,6 +178,38 @@ def test_deadline_generates_partial_tables_and_returns_124(monkeypatch, tmp_path
     monkeypatch.setattr(runner, "execute", execute)
     assert runner.main([]) == 124
     assert "benchmarks.report" in commands[-1]
-    manifest = json.loads((tmp_path / "results/overnight/benchmark_run.json").read_text())
+    manifest = json.loads((tmp_path / "results/overnight_full/benchmark_run.json").read_text())
     assert manifest["status"] == "deadline_reached"
     assert manifest["report_status"] == "complete"
+
+
+def test_generation_estimate_uses_supplied_trajectories_not_just_batch_ceiling():
+    cfg = load("grpo", "overnight_full")
+    reference = runner.estimate(cfg, evaluate=False)
+    cfg.policy.gen_batch_size = 4
+    smaller = runner.estimate(cfg, evaluate=False)
+    assert reference["training_steps_at_caps"] == smaller["training_steps_at_caps"] == 4000
+    assert smaller["training_seconds"] > reference["training_seconds"]
+    cfg.train.games_per_iter = 1
+    capped = runner.estimate(cfg, evaluate=False)
+    cfg.policy.gen_batch_size = 32
+    assert runner.estimate(cfg, evaluate=False) == capped
+
+
+def test_evaluation_estimate_accounts_for_partial_final_batch(monkeypatch):
+    from empg.envs import base
+
+    class Bench:
+        def tasks(self, split):
+            return list(range(48))
+
+    monkeypatch.setattr(base, "make_benchmark", lambda *a, **kw: Bench())
+    cfg = load("grpo", "overnight_full")
+    full = runner.estimate(cfg, train=False)
+    assert full["eval_tasks"] == 48
+    cfg.eval.max_tasks = 32
+    first = runner.estimate(cfg, train=False)
+    cfg.eval.max_tasks = 16
+    last = runner.estimate(cfg, train=False)
+    assert full["evaluation_seconds"] == pytest.approx(
+        first["evaluation_seconds"] + last["evaluation_seconds"])

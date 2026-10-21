@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import time
+from typing import Callable
 
 import numpy as np
 
@@ -52,7 +53,8 @@ def _keys(obs: str, info: dict) -> dict:
 def run_episodes(policy, bench: Benchmark, tasks: list[str], groups: list[int],
                  max_steps: int, success_reward: float = 10.0,
                  invalid_penalty: float = 0.1, greedy: bool = False,
-                 timings: dict | None = None) -> list[Trajectory]:
+                 timings: dict | None = None,
+                 progress: Callable[[int, int], None] | None = None) -> list[Trajectory]:
     """Play one episode per (task, group) pair; all envs advance one turn per
     batched generate() call."""
     if len(tasks) != len(groups) or not tasks or max_steps < 1:
@@ -60,6 +62,7 @@ def run_episodes(policy, bench: Benchmark, tasks: list[str], groups: list[int],
     batch = bench.episode_batch(tasks) if hasattr(bench, "episode_batch") else SerialBatch(bench, tasks)
     trajs = [Trajectory(task=t, group=g) for t, g in zip(tasks, groups)]
     times = {"t_env_reset": 0.0, "t_generate": 0.0, "t_env_step": 0.0}
+    parser = getattr(bench, "parse_action", parse_action)
     try:
         start = time.perf_counter()
         initial = batch.reset()
@@ -70,7 +73,7 @@ def run_episodes(policy, bench: Benchmark, tasks: list[str], groups: list[int],
             tr.init_keys = _keys(o, info)
         active = list(range(len(tasks)))
         with policy.generation():
-            for _ in range(max_steps):
+            for turn in range(1, max_steps + 1):
                 if not active:
                     break
                 prompts = [bench.prompt(infos[i]["task"], obs[i], infos[i]["admissible"], history[i])
@@ -80,7 +83,7 @@ def run_episodes(policy, bench: Benchmark, tasks: list[str], groups: list[int],
                 times["t_generate"] += time.perf_counter() - start
                 if any(len(rows) != len(active) for rows in (p_ids, r_ids, texts)):
                     raise ValueError("generation must return one response per active episode")
-                parsed = [parse_action(text) for text in texts]
+                parsed = [parser(text) for text in texts]
                 start = time.perf_counter()
                 results = batch.step(active, [a for a, _ in parsed])
                 times["t_env_step"] += time.perf_counter() - start
@@ -98,6 +101,8 @@ def run_episodes(policy, bench: Benchmark, tasks: list[str], groups: list[int],
                     if not done:
                         still.append(i)
                 active = still
+                if progress is not None and (turn % 5 == 0 or not active or turn == max_steps):
+                    progress(turn, len(active))
     finally:
         batch.close()
         if timings is not None:

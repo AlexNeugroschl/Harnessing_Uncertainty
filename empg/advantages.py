@@ -99,7 +99,7 @@ def next_step_entropy(h_norm, step_traj) -> np.ndarray:
 
 
 def compute_advantages(traj_rewards, group_ids, step_traj, step_entropy,
-                       cfg: AdvantageConfig, intrinsic=None) -> np.ndarray:
+                       cfg: AdvantageConfig, intrinsic=None, step_rewards=None) -> np.ndarray:
     """Per-step advantages for the batch, according to ``cfg.method``.
 
     ``intrinsic`` is an optional, already-weighted per-step curiosity term
@@ -109,15 +109,27 @@ def compute_advantages(traj_rewards, group_ids, step_traj, step_entropy,
     """
     step_traj = np.asarray(step_traj)
     rewards = np.asarray(traj_rewards, dtype=np.float64)
+    scores = np.asarray(step_rewards, dtype=np.float64) if step_rewards is not None else None
+    if scores is not None and scores.shape != step_traj.shape:
+        raise ValueError("step_rewards must contain one score per response step")
     if intrinsic is not None and cfg.curiosity.mode == "trajectory":
         per_traj = np.bincount(step_traj, weights=intrinsic, minlength=len(rewards))
-        rewards = rewards + per_traj / np.maximum(np.bincount(step_traj, minlength=len(rewards)), 1)
+        bonus = per_traj / np.maximum(np.bincount(step_traj, minlength=len(rewards)), 1)
+        if scores is None:
+            rewards = rewards + bonus
+        else:
+            scores = scores + bonus[step_traj]
         intrinsic = None
     elif intrinsic is not None and cfg.curiosity.mode != "step":
         raise ValueError(f"unknown curiosity mode: {cfg.curiosity.mode!r}")
 
-    a_traj = grpo_advantages(rewards, group_ids)
-    a_step = a_traj[step_traj]  # GRPO: outcome advantage broadcast to every step
+    if scores is None:
+        a_traj = grpo_advantages(rewards, group_ids)
+        a_step = a_traj[step_traj]  # legacy: episode advantage broadcast to every step
+    else:
+        # Verl-Agent represents each response as a row with its episode outcome
+        # minus that response's invalid-format penalty, then normalizes over rows.
+        a_step = grpo_advantages(scores, np.asarray(group_ids)[step_traj])
 
     if cfg.method == "grpo":
         if intrinsic is None:

@@ -65,3 +65,27 @@ def test_rollout_cleanup_success_and_failure():
 def test_rollout_rejects_mismatched_groups():
     with pytest.raises(ValueError, match="matching"):
         run_episodes(Policy(), Bench(), ["a"], [], 2)
+
+
+def test_progress_reports_completion_without_changing_trajectories():
+    events = []
+    trajectories = run_episodes(Policy(), Bench(), ["a", "b"], [0, 1], 50,
+                                progress=lambda turn, active: events.append((turn, active)))
+    assert events == [(1, 0)]
+    assert all(t.won and len(t.steps) == 1 for t in trajectories)
+
+
+def test_progress_reports_periodically_and_at_horizon():
+    class ContinuingEnv(Env):
+        def step(self, action):
+            return "unchanged", 0.0, False, {"won": False, "admissible": ["look"]}
+
+    class ContinuingBench(Bench):
+        def make_env(self, task):
+            return ContinuingEnv(task)
+
+    events = []
+    trajectories = run_episodes(Policy(), ContinuingBench(), ["a"], [0], 11,
+                                progress=lambda turn, active: events.append((turn, active)))
+    assert events == [(5, 1), (10, 1), (11, 1)]
+    assert len(trajectories[0].steps) == 11

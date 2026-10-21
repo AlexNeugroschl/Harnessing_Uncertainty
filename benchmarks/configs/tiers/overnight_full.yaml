@@ -1,0 +1,11 @@
+# Expanded development comparison on one 8GB laptop GPU.
+# Targets ~8 hours; the root runner allows an 8.5-hour completion ceiling.
+inherit: overnight.yaml
+out_dir: runs/overnight_full
+train:
+  iterations: 5         # 20 game opportunities, up to 4,000 response steps per method
+  games_per_iter: 4      # 16 concurrent trajectories, with four siblings per game
+  mini_batches: 8       # retain approximately 100 response steps per optimizer step
+  max_seconds: 0        # matched iteration/task opportunities across methods
+eval:
+  max_tasks: 48

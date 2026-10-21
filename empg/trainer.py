@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import dataclasses
 from contextlib import ExitStack
 import json
 import random
@@ -12,7 +11,7 @@ import numpy as np
 import torch
 
 from empg.advantages import compute_advantages, normalize_entropy
-from empg.config import Config, config_fingerprint
+from empg.config import Config, config_dict, config_fingerprint, config_matches
 from empg.curiosity import exploration_stats, intrinsic_rewards
 from empg.envs.base import make_benchmark
 from empg.loss import policy_loss
@@ -68,6 +67,12 @@ def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
     groups = [tr.group for tr in trajs]
     won = [tr.won for tr in trajs]
     step_h = [s.entropy for s in steps]
+    step_rewards = None
+    if tc.reward_mode == "step":
+        step_rewards = np.array([tc.success_reward * trajs[t].won - tc.invalid_penalty * (not s.valid)
+                                 for t, s in zip(step_traj, steps)])
+    elif tc.reward_mode != "trajectory":
+        raise ValueError("train.reward_mode must be 'trajectory' or 'step'")
     cur = cfg.advantage.curiosity
     intrinsic = None
     if cur.weight != 0:
@@ -75,7 +80,7 @@ def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
             [tr.key_seq(cur.key) for tr in trajs], groups, won, cur, iteration,
             tc.iterations, h_norm=normalize_entropy(step_h))
     adv = compute_advantages([tr.reward for tr in trajs], groups, step_traj, step_h,
-                             cfg.advantage, intrinsic=intrinsic)
+                             cfg.advantage, intrinsic=intrinsic, step_rewards=step_rewards)
 
     # Keep transformer gradient checkpointing active; disable LoRA/module
     # dropout so PPO uses the conditional distribution used in rollout.
@@ -97,13 +102,15 @@ def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
             opt.zero_grad(set_to_none=True)
             for s in range(0, len(mb), mb_size):
                 idx = mb[s:s + mb_size]
-                logp, _, mask = policy.forward_logprobs([P[i] for i in idx], [R[i] for i in idx])
+                logp, entropy, mask = policy.forward_logprobs(
+                    [P[i] for i in idx], [R[i] for i in idx], with_entropy=tc.entropy_coef > 0)
                 T = logp.shape[1]
                 old = _right_aligned([old_logp[i] for i in idx], T, dev)
                 ref = _right_aligned([ref_logp[i] for i in idx], T, dev) if ref_logp else None
                 a = torch.tensor(adv[idx], dtype=torch.float32, device=dev)[:, None].expand(-1, T)
                 loss, st = policy_loss(logp, old, ref, a, mask, tc.clip_low, tc.clip_high,
-                                       tc.kl_coef, tensor_stats=True)
+                                       tc.kl_coef, tensor_stats=True, entropy=entropy,
+                                       entropy_coef=tc.entropy_coef)
                 (loss / n_tok).backward()
                 for k in ("pg", "kl", "clipfrac"):
                     sums[k] += st[k]
@@ -121,13 +128,15 @@ def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
     rewards = np.array([tr.reward for tr in trajs])
     lens = length_stats(response_lengths(trajs))
     groups = np.array(groups)
-    flat = np.mean([np.ptp(rewards[groups == g]) == 0 for g in np.unique(groups)])
+    score_groups = groups[step_traj] if step_rewards is not None else groups
+    scores = step_rewards if step_rewards is not None else rewards
+    flat = np.mean([np.ptp(scores[score_groups == g]) == 0 for g in np.unique(groups)])
     n = max(sums["tokens"], 1)
     explore = exploration_stats([tr.key_seq(METRICS_KEY) for tr in trajs], groups, won)
     # Measure the actual contribution after centering/trajectory normalization.
     # Raw positive bonuses can exaggerate influence when most are constant.
     base_adv = compute_advantages([tr.reward for tr in trajs], groups, step_traj, step_h,
-                                 cfg.advantage)
+                                 cfg.advantage, step_rewards=step_rewards)
     effective_intrinsic = adv - base_adv
     share = float(np.abs(effective_intrinsic).mean() / max(np.abs(adv).mean(), 1e-8))
     return {
@@ -135,7 +144,7 @@ def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
         **explore,
         "intrinsic_share": share,  # mean |A_with_curiosity - A_without| / mean |A_with|
         "success": float(np.mean([tr.won for tr in trajs])),
-        "reward": float(rewards.mean()),
+        "reward": float(scores.mean()),
         "ep_len": float(np.mean([len(tr.steps) for tr in trajs])),
         "invalid_rate": float(np.mean([not s.valid for s in steps])),
         "resp_len_mean": lens["mean"], "resp_len_p99": lens["p99"], "resp_len_max": lens["max"],
@@ -176,6 +185,10 @@ def train(cfg: Config, log=print) -> LLMPolicy:
         raise ValueError("GRPO comparisons require group_size >= 2")
     if tc.max_env_steps < 0 or tc.max_seconds < 0:
         raise ValueError("training budgets must be nonnegative")
+    if not np.isfinite(tc.entropy_coef) or tc.entropy_coef < 0:
+        raise ValueError("train.entropy_coef must be finite and nonnegative")
+    if tc.reward_mode not in ("trajectory", "step"):
+        raise ValueError("train.reward_mode must be 'trajectory' or 'step'")
     if cfg.policy.temperature != 1.0 or cfg.policy.top_p != 1.0:
         raise ValueError("on-policy training requires temperature=1 and top_p=1")
     seed_everything(cfg.seed)
@@ -183,10 +196,10 @@ def train(cfg: Config, log=print) -> LLMPolicy:
     rng = np.random.default_rng(np.random.SeedSequence([cfg.seed, 1]))
     run_dir = cfg.run_dir
     saved_config = run_dir / "config.json"
-    if saved_config.exists() and json.loads(saved_config.read_text()) != dataclasses.asdict(cfg):
+    if saved_config.exists() and not config_matches(json.loads(saved_config.read_text()), cfg):
         raise ValueError(f"{run_dir} contains a different configuration; choose a new name= or out_dir=")
     run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "config.json").write_text(json.dumps(dataclasses.asdict(cfg), indent=2))
+    (run_dir / "config.json").write_text(json.dumps(config_dict(cfg), indent=2))
 
     bench = make_benchmark(cfg.benchmark, **cfg.env)
     train_tasks = bench.tasks("train")
@@ -216,9 +229,14 @@ def train(cfg: Config, log=print) -> LLMPolicy:
             tasks = [train_tasks[c] for c in chosen for _ in range(tc.group_size)]
             groups = [g for g in range(tc.games_per_iter) for _ in range(tc.group_size)]
             rollout_times = {}
+            log(f"[{cfg.name} s{cfg.seed}] batch {it}/{tc.iterations}: "
+                f"{tc.games_per_iter} games, {len(tasks)} trajectories")
             trajs = run_episodes(policy, bench, tasks, groups, tc.max_steps,
-                                 tc.success_reward, tc.invalid_penalty, timings=rollout_times)
+                                 tc.success_reward, tc.invalid_penalty, timings=rollout_times,
+                                 progress=lambda turn, active: log(
+                                     f"  rollout turn {turn}/{tc.max_steps}, {active} active"))
             t1 = time.time()
+            log(f"  scoring and updating batch {it}/{tc.iterations}")
             stats = update(policy, opt, trajs, cfg, rng, iteration=it)
             stats.update(iteration=it, t_rollout=t1 - t0, t_update=time.time() - t1,
                          **rollout_times, **gpu_memory_check(log))

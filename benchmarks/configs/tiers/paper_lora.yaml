@@ -1,0 +1,28 @@
+# Publication-era Verl-Agent settings, scaled to an 8GB LoRA experiment.
+# This is NOT the paper's full-parameter, 16-game, multi-A100 reproduction.
+# Run --estimate-only before training; this tier has no default wall-clock deadline.
+out_dir: runs/paper_lora
+env:
+  action_parser: verl
+policy:
+  max_new_tokens: 512
+  amp: true
+train:
+  iterations: 150
+  games_per_iter: 2       # local compromise; paper uses 16 games per batch
+  group_size: 8
+  max_steps: 50
+  lr: 1.0e-6
+  weight_decay: 0.01     # publication-era actor optimizer default
+  entropy_coef: 0.001
+  reward_mode: step
+  mini_batches: 4
+  max_seconds: 0
+  save_every: 10
+eval:
+  split: valid_unseen
+  max_tasks: 0
+  max_steps: 50
+  greedy: false
+  temperature: 0.4
+  selection: stratified
