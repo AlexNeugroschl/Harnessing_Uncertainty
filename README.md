@@ -6,7 +6,7 @@ An implementation of **Entropy-Modulated Policy Gradients (EMPG)** from
 ALFWorld**, and EMPG reshapes GRPO's advantage using the step-level entropy of the policy being trained.
 
 The [paper fidelity review](docs/paper_fidelity_review.md) distinguishes the implemented equations
-from the smaller local training protocol and documents the opt-in corrected, faster presets.
+from the smaller local training protocol and documents the corrected defaults and faster presets.
 
 ## The algorithm
 
@@ -70,114 +70,92 @@ Extension points:
 
 ## Setup (WSL, NVIDIA GPU)
 
-ALFWorld's TextWorld backend is Linux-only, so everything runs in WSL:
+ALFWorld's TextWorld backend runs in Linux. The default uses the separate vLLM environment:
 
 ```bash
 wsl
 cd "/mnt/c/.../Harnessing_Uncertainty"
-bash scripts/setup_wsl.sh              # venv in ~/venvs/empg, CUDA 12.8 torch, deps, alfworld-download
-source ~/venvs/empg/bin/activate
+EMPG_VLLM=1 EMPG_VENV=~/venvs/empg-vllm bash scripts/setup_wsl.sh
+source ~/venvs/empg-vllm/bin/activate
 ```
+
+The HF-only fallback uses `bash scripts/setup_wsl.sh` and `~/venvs/empg` instead.
+Model weights are downloaded on first use and cached locally; an HF token is optional.
 
 ## Running
 
-For training, evaluation **and comparison tables in one command**, run the root file:
-
 ```bash
-python run_benchmarks.py --estimate-only   # preview the remaining workload without loading a model
-python run_benchmarks.py                   # expanded overnight: same four methods, seed 0 + base
+python run_benchmarks.py --estimate-only  # preview without loading a model
+python run_benchmarks.py                  # corrected GRPO vs EMPG, seed 0, plus base
+python run_benchmarks.py --hours 8        # strict eight-hour training/evaluation ceiling
+python run_benchmarks.py --report-only
 ```
 
-The default is now **`overnight_full`**, targeting approximately **eight hours** on the
-profiled RTX 5060 Laptop 8GB. It expands the same four-method development comparison:
+The default **`paper_overnight`** keeps LoRA rank 16 and uses the corrected EMPG protocol
+with compiled vLLM decoding, bf16 autocast, checkpointing, and exact chunked vocabulary scores.
+New artifacts go to **`runs/paper_overnight/`** and **`results/paper_overnight/`**.
 
-| Setting | Expanded overnight (default) | Original overnight | Full confirmation budget |
-|---|---|---|---|
-| Training seeds | 0 | 0 | 0, 1, 2 |
-| Training batch | 4 tasks × 4 siblings (16 trajectories) | 1 task × 4 siblings | 2 tasks × 8 siblings |
-| Training iterations | 5 for every method | Up to 12 | 40 |
-| Training budget per method | 20 game opportunities, up to 4,000 response steps, 40 optimizer steps | 40 minutes | Iteration budget |
-| Train / eval horizon | 50 / 50 turns | 50 / 50 turns | 50 / 50 turns |
-| Response cap | 256 tokens | 256 tokens | 256 tokens |
-| Evaluation panel | Same stratified 48 `valid_seen` tasks across methods | 24 `valid_seen` tasks | All 134 `valid_unseen` tasks |
-| Suite deadline | 8.5 hours, including a completion margin | 8 hours | Unlimited by default |
+| Setting | Default local overnight | Longer corrected local comparison |
+|---|---|---|
+| Tier | `paper_overnight` | `paper_lora_fast` |
+| Methods | GRPO and EMPG | GRPO and EMPG |
+| Seeds | 0 | 0, 1, 2 |
+| Batch | 2 games, 8 siblings per game | Same |
+| Training iterations | 12 | 150 |
+| Episodes per method/seed | 192 | 2,400 |
+| Train / evaluation horizon | 50 / 50 turns | Same |
+| Response / prompt limits | 512 / 2,048 tokens | Same |
+| Learning rate / weight decay | 1e-6 / 0.01 | Same |
+| Entropy loss / KL coefficient | 0.001 / 0.01 | Same |
+| Evaluation | All 134 `valid_unseen` games, sampling temperature 0.4 | Same |
+| Suite deadline | 8.5 hours | Unlimited unless `--hours` is specified |
 
-The larger batch fills more generation slots and samples more games. Eight optimizer
-minibatches per iteration retain approximately 100 response steps per optimizer step at
-the full horizon. Completed methods receive the same task schedule and number of updates;
-actual episode lengths and token costs can differ. The original per-method 40-minute cap
-does not apply to the expanded preset. One seed remains development evidence, even with
-more training and twice the evaluation panel. It cannot establish a reliable winner.
+Both methods receive the same task schedule and fixed iteration budget. The default is a
+hardware-limited comparison: the paper used 16 games per batch and full-parameter updates.
+One seed cannot establish a reliable winner. See the [fidelity review](docs/paper_fidelity_review.md)
+for the source mapping, remaining differences, performance measurements and validation.
 
-New artifacts go to **`runs/overnight_full/`** and **`results/overnight_full/`**. Existing
-`runs/overnight/` and `results/overnight/` remain available with `--tier overnight`.
-The central runtime estimate is approximately 8.2 hours. The default 8.5-hour ceiling
-gives the final evaluation extra time; use `--hours 8` for a strict eight-hour cutoff.
-See [the expanded plan and timing calibration](docs/overnight_full.md).
+The printed runtime is a workload extrapolation, including measured component speedups and
+transfer/startup costs. It is not a measured overnight runtime or a promise to finish within
+the deadline. `--hours` includes training, evaluation and phase startup. At the deadline the
+runner stops the active phase and its workers, preserves completed results, generates partial
+reports, and exits with code 124. Unfinished evaluation is missing, never zero success.
+Cleanup and reporting take additional time. Changing the deadline does not change the workload.
 
-`--hours` bounds the entire training/evaluation suite, including phase startup, not just
-training updates. At the deadline it terminates the active Linux phase and its environment
-workers, preserves completed evaluations/logs, generates partial tables, and exits with code
-124. An unfinished evaluation is shown as missing, never as zero success. Cleanup and reports
-take additional time. A training time cap is softer: the current rollout/update finishes before
-saving the adapter. None of these runtime estimates is a measured timing interval.
-
-```bash
-python run_benchmarks.py                       # expanded comparison, 8.5-hour ceiling
-python run_benchmarks.py --hours 8              # strict eight-hour cutoff
-python run_benchmarks.py --report-only          # regenerate expanded overnight tables
-python run_benchmarks.py --tier overnight --report-only  # original run's tables
-python run_benchmarks.py --tier full            # opt into the much longer, three-seed benchmark
-```
-
-For a shorter night, select one controlled pair, e.g.
-`--arms grpo grpo_cur_group --hours 6`. Changing `--hours` alone changes the suite stop time;
-it does not change the preset's fixed workload. Uncommenting more methods or adding
-seeds increases work and can leave later methods incomplete at the deadline. If a previous
-full run is still running, stop its terminal command with Ctrl+C before starting another GPU
-job; editing the preset does not change an already-running process.
-
-The `ENABLED_METHODS` list near the top of `run_benchmarks.py` lists all ten methods on
-separate lines. Comment out a line to disable its run; uncomment it to enable it.
-By default **GRPO**, **EMPG**, **GRPO + group curiosity**, and **EMPG + episodic curiosity**
-are enabled. `--arms` overrides the list for one invocation.
-
-The two curiosity priorities test different ideas: group novelty rewards reaching states
-that few sibling rollouts visit, while EMPG plus episodic novelty tests whether exploration
-complements the clarity bonus. These are hypotheses, not demonstrated winners. Compare each
-against its matching baseline; this four-method selection cannot isolate the effect of
-episodic versus group scope or establish a curiosity/EMPG interaction. Enable
-`grpo_cur_episodic` next for those comparisons, and `grpo_memory` to check whether a gain
-comes from compensating for the short prompt history. The oracle, sign-flip and g/f-only
-variants are useful diagnostics after a candidate shows a gain in task success.
-
-This also works from Windows Python: the file forwards to `Ubuntu-24.04` in WSL and
-`~/venvs/empg/bin/python`. For another setup, set `EMPG_WSL_DISTRO` and/or
-`EMPG_WSL_PYTHON` (an absolute Linux Python path). Inside WSL, use the activated environment above.
-
-The `full` tier retains the laptop-sized LoRA setup, with 40 training iterations,
-2 tasks × 8 sibling episodes, 50-turn training/evaluation horizons, and all 134
-`valid_unseen` evaluation tasks. It is a full **local** comparison, not a replication of the
-paper's larger training budget. On this RTX 5060 Laptop 8GB, four methods × three seeds
-at `--tier full` require multiple days. Use `python run_benchmarks.py --tier full --estimate-only`
-for the current calibrated workload estimate; enabling all ten methods increases work further.
-Short profile measurements do not capture long-context costs. These estimates are not
-measured timing intervals or a promise that 40 iterations establish an effect.
-
-For a focused development comparison before that commitment:
+Windows Python forwards automatically to `Ubuntu-24.04` and `~/venvs/empg-vllm` for the fast
+presets, or `~/venvs/empg` for HF presets. `EMPG_WSL_DISTRO` and `EMPG_WSL_PYTHON` override
+those choices. Inside WSL, activate the matching environment yourself. If vLLM is unavailable,
+use `-- policy.backend=hf` from the HF environment and a fresh run directory; it will be slower.
 
 ```bash
-python run_benchmarks.py --tier pilot --arms grpo grpo_cur_episodic --seeds 0 --estimate-only
-python run_benchmarks.py --tier pilot --arms grpo grpo_cur_episodic --seeds 0
-python run_benchmarks.py --tier smoke --arms grpo empg --seeds 0   # plumbing check only
+# Corrected longer experiment; inspect cost before committing to it.
+python run_benchmarks.py --tier paper_lora_fast --estimate-only
+
+# Short real integration check using the same protocol, not a learning result.
+python run_benchmarks.py --seeds 0 --runs runs/paper_smoke --out results/paper_smoke -- \
+  train.iterations=2 train.games_per_iter=1 train.group_size=2 \
+  train.max_steps=2 eval.max_tasks=6 eval.max_steps=2
+
+# Historical results and workload presets remain available.
+python run_benchmarks.py --tier overnight_full --report-only \
+  --arms grpo empg grpo_cur_group empg_cur_episodic
+python run_benchmarks.py --tier overnight --report-only
 ```
 
-The two-method pilot is estimated at **about 1.3–3.8 hours**, using `valid_seen` for development.
-It can reveal exploration behavior and obvious failures; a null result cannot rule out a
-long-horizon learning effect. For confirmation, fix the candidate before evaluating on
-`valid_unseen`, for example `--tier full --arms grpo grpo_cur_episodic --seeds 0 1 2`.
-Comparisons across all ten methods are exploratory; their intervals are not adjusted for
-selecting the best method.
+`paper_lora` provides the corrected 150-iteration protocol with HF decoding. Legacy `full`,
+`reduced`, `overnight_full`, `overnight`, `pilot`, `small`, and `smoke` preserve their older
+settings and output directories. They do not inherit the corrected paper protocol.
+The 150-iteration tiers can take days; a short suite deadline can stop their first method
+before evaluation. Use `paper_overnight` for the bounded overnight comparison.
+
+`ENABLED_METHODS` near the top of `run_benchmarks.py` selects the default methods; `--arms`
+overrides it for one command. Curiosity, memory and sign-flip variants remain optional research
+extensions. Enable them after establishing the GRPO/EMPG comparison, and compare each against
+its matching control. More methods or seeds add cost and can leave later methods unfinished.
+
+Training and evaluation reuse one loaded model/engine for corrected tiers. Explicit evaluation
+sampling seeds isolate evaluation from training RNG consumption. Adapters reload after updates,
+and the engine is shut down and its temporary adapters removed when the phase ends.
 
 Results go to `runs/<tier>/` and reports to `results/<tier>/`. The runner generates:
 
@@ -292,17 +270,18 @@ python -m benchmarks.suite --tier small --arms grpo_cur_group advantage.curiosit
 ## Speed
 
 The [October 21 fidelity and performance review](docs/paper_fidelity_review.md) found material
-protocol differences and measured a substantial decoding improvement. Existing tiers preserve
-their original behavior; `paper_lora` opts into corrected framework reward placement, token entropy
+protocol differences and measured a substantial decoding improvement. Legacy tiers preserve
+their original behavior; the corrected defaults and `paper_lora` use corrected framework reward placement, token entropy
 regularization, response cap 512, publication-era action parsing, and sampled evaluation at
-temperature 0.4. `paper_lora_fast` adds compiled vLLM and a 32-sequence engine limit. Both remain
+temperature 0.4. `paper_lora_fast` adds compiled vLLM and a 32-sequence engine limit. These remain
 local LoRA experiments with two games per batch, rather than the original distributed full
-fine-tuning experiment. They have no default time limit.
+fine-tuning experiment. The 150-iteration presets have no default time limit; the default
+`paper_overnight` has an 8.5-hour deadline.
 
 On identical prompts, compiled vLLM decoded about 2.4-4.5x faster than HF across fixed-length probes.
 CUDA bf16 autocast reduced a separate cached-trajectory update from about 33 to 28 seconds.
-These are component measurements, not a measured full-suite speedup. The runner's current
-runtime estimate remains HF-based. See the review for measurements, memory limits, and pilot
+These are component measurements, not a measured full-suite speedup. The runner's estimate
+includes conservative component speedups and transfer costs. See the review for measurements, memory limits, and pilot
 commands; use the separate `empg-vllm` environment for the fast preset.
 
 Scoring, entropy (`H_t`) and the update always run on the HF model being trained:

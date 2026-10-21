@@ -7,7 +7,9 @@ Audit: October 21, 2026. Hardware: RTX 5060 Laptop, 8 GiB, Ubuntu 24.04 in WSL.
 The entropy modulation implements the published procedure, but the completed overnight
 experiment does not reproduce the paper's training protocol. Both protocol changes and
 performance work are needed before interpreting the weak success rates as evidence about EMPG.
-The changes in this review are opt-in; existing configurations and completed results remain valid.
+The original audit introduced opt-in settings. The follow-up implementation now makes the corrected
+LoRA comparison the default; see [implementation and run instructions](paper_implementation.md).
+Historical tiers and completed results retain their original settings and fingerprints.
 
 The reference is [Wang et al., EMPG, September 2025](https://arxiv.org/html/2509.09265v1),
 especially sections 4, C and E. The public framework is
@@ -22,8 +24,8 @@ but not a complete runnable EMPG experiment in this repository.
 The core calculation was already substantially correct: full-vocabulary token entropy averaged
 over a response, batch min-max normalization, mean-normalized exponential gradient scaling,
 next-response clarity within the same episode, terminal clarity zero, and final step-mean
-centering. Small numerical differences remain: local normalization epsilon is 1e-6 versus
-1e-8 in the appendix; the appendix adds epsilon to the scaling denominator. Exact response
+centering. The follow-up corrected the numerical constants in the paper presets: normalization
+and scaling-denominator epsilon are now both 1e-8, while legacy tiers retain their constants. Exact response
 boundary parity cannot be established without its unpublished sequence-processing helper.
 
 | Setting | Published experiment | Completed `overnight_full` |
@@ -78,9 +80,12 @@ This is separate from the detached entropy used to compute EMPG advantages. Mere
 entropy for EMPG did not supply the missing entropy regularizer.
 
 The paper presets also select the pinned actor optimizer's weight decay of 0.01; legacy local
-tiers use zero. Other framework differences remain: the public script filters prompts against
-a 2,048-token limit, removes padding, and uses distributed response minibatches. This local
-trainer pads length-sorted microbatches and uses four optimizer minibatches per iteration.
+tiers use zero. Corrected tiers now enforce the framework's 2,048-token prompt limit without
+silent truncation and use sequential 256-response optimizer minibatches. A remaining framework
+difference is unpadding: the local trainer uses length-sorted, padded microbatches rather than
+the reference's distributed unpadded actor.
+The final actor-loss comparison also identified the framework's negative-advantage dual-clip
+bound of 3, which the corrected presets now enable alongside the symmetric 0.2 PPO clip.
 These are additional reasons to call the presets scaled protocol checks rather than exact
 reproductions. Prompt templates and two-step observation/action history are substantially
 the same; the first ALFWorld observation already contains the task goal.
@@ -173,9 +178,10 @@ python -m benchmarks.report --runs runs/paper_fast_pilot --split valid_seen \
   --out results/paper_fast_pilot --baseline grpo --arms grpo empg --seeds 0
 ```
 
-The runner's timing calibration is still HF-based. Its printed range is not a calibration of
-compiled vLLM or the added entropy objective. Neither paper tier has a default time limit;
-specify `--hours` for a bounded run. A deadline can leave later methods incomplete. Increase
+The follow-up runner estimate includes conservative component speedups, the entropy objective,
+and transfer/startup costs. It remains an extrapolation, not a measured overnight runtime.
+The 150-iteration paper tiers have no default time limit; `paper_overnight` has an 8.5-hour
+default deadline. A deadline can leave later methods incomplete. Increase
 the fixed iteration budget only after a full-horizon pilot measures rollout, update and
 evaluation costs. Start with GRPO and EMPG; adding curiosity arms divides the same compute
 budget before the basic reproduction is established. Use three seeds for confirmation.

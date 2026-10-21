@@ -88,9 +88,11 @@ def main():
         policy.load_adapter(args.adapter)
 
     trajs = []
-    with ExitStack() as cleanup, policy.generation():
+    with ExitStack() as cleanup:
+        cleanup.callback(policy.close)
         if hasattr(bench, "close"):
             cleanup.callback(bench.close)
+        cleanup.enter_context(policy.generation())
         for s in range(0, len(chosen), args.games_per_batch):
             batch = chosen[s:s + args.games_per_batch]
             tasks = [t for t in batch for _ in range(args.group)]

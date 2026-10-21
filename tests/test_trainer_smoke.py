@@ -143,6 +143,7 @@ def test_one_update(policy, method, curiosity, reward_mode):
     cfg.train.mini_batches = 2
     cfg.train.reward_mode = reward_mode
     cfg.train.entropy_coef = .001 if reward_mode == "step" else 0.
+    cfg.train.dual_clip = 3. if reward_mode == "step" else 0.
     torch.manual_seed(0)
     trajs = run_episodes(pol, FakeBench(), ["open the door"] * 4, [0, 0, 1, 1], max_steps=3)
     assert all(1 <= len(t.steps) <= 3 for t in trajs)
@@ -190,3 +191,21 @@ def test_training_rejects_transformed_sampling(policy):
             update(pol, None, [], cfg, np.random.default_rng(0))
     finally:
         pol.cfg.temperature = saved
+
+
+def test_adapter_save_is_complete_without_a_hub_config_probe(policy, tmp_path, monkeypatch):
+    from peft import get_peft_model_state_dict
+    from peft.utils import load_peft_weights, save_and_load
+
+    pol, _ = policy
+
+    def unexpected_network(*args, **kwargs):
+        raise AssertionError("adapter saving must not probe the Hub")
+
+    monkeypatch.setattr(save_and_load, "check_file_exists_on_hf_hub", unexpected_network)
+    expected = get_peft_model_state_dict(pol.model, save_embedding_layers=False)
+    pol.save(str(tmp_path))
+    actual = load_peft_weights(str(tmp_path), device="cpu")
+    assert set(actual) == set(expected)
+    for key in expected:
+        torch.testing.assert_close(actual[key], expected[key])

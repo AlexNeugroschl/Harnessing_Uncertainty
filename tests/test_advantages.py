@@ -93,3 +93,16 @@ def test_clarity_gives_signal_when_grpo_has_none():
 def test_unknown_method_raises():
     with pytest.raises(ValueError):
         compute_advantages(REWARDS, GROUPS, STEP_TRAJ, ENTROPY, AdvantageConfig(method="ppo"))
+
+
+def test_appendix_constants_match_independent_calculation_with_tiny_entropy_range():
+    h = np.array([1., 1. + 2e-8, 1. + 5e-8, 1. + 1e-8])
+    cfg = AdvantageConfig(entropy_eps=1e-8, scale_eps=1e-8)
+    actual = compute_advantages([10., 0.], [0, 0], [0, 0, 1, 1], h, cfg)
+    normalized = (h - h.min()) / (h.max() - h.min() + 1e-8)
+    raw = np.exp(-normalized)
+    g = raw / (raw.mean() + 1e-8)
+    expected = grpo_advantages([10., 0.], [0, 0])[[0, 0, 1, 1]] * g
+    expected[[0, 2]] += .05 * raw[[1, 3]]
+    expected -= expected.mean()
+    np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)

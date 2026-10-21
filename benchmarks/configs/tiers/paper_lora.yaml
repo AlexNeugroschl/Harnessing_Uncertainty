@@ -6,7 +6,11 @@ env:
   action_parser: verl
 policy:
   max_new_tokens: 512
+  max_prompt_tokens: 2048
   amp: true
+advantage:
+  entropy_eps: 1.0e-8
+  scale_eps: 1.0e-8
 train:
   iterations: 150
   games_per_iter: 2       # local compromise; paper uses 16 games per batch
@@ -15,8 +19,11 @@ train:
   lr: 1.0e-6
   weight_decay: 0.01     # publication-era actor optimizer default
   entropy_coef: 0.001
+  dual_clip: 3.0         # pinned actor's negative-advantage bound, in addition to PPO clip .2
   reward_mode: step
   mini_batches: 4
+  mini_batch_size: 256
+  shuffle: false
   max_seconds: 0
   save_every: 10
 eval:
@@ -25,4 +32,5 @@ eval:
   max_steps: 50
   greedy: false
   temperature: 0.4
+  sampling_seed: 0
   selection: stratified

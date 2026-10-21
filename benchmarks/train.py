@@ -14,8 +14,16 @@ from empg.trainer import train
 def main():
     ap = argparse.ArgumentParser()
     add_args(ap)
+    ap.add_argument("--evaluate", action="store_true", help="evaluate with the same loaded model/engine")
     args = ap.parse_args()
-    train(load(args.config, args.tier, args.overrides, args.seed))
+    cfg = load(args.config, args.tier, args.overrides, args.seed)
+    policy = train(cfg)
+    try:
+        if args.evaluate:
+            from benchmarks.evaluate import save_evaluation
+            save_evaluation(policy, cfg)
+    finally:
+        policy.close()
 
 
 if __name__ == "__main__":

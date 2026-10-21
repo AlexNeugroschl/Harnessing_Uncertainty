@@ -78,7 +78,12 @@ def run_suite(args, selected, deadline=None):
                 continue
             finished = _finished(cfg)  # validate config even if a partial run has no adapter
             if not (cfg.run_dir / "adapter").exists() or not finished:
-                run("benchmarks.train", arm, args.tier, seed, args.overrides, deadline=deadline)
+                # Explicit evaluation RNG makes engine reuse independent of how
+                # many samples training consumed. Legacy runs keep separate phases.
+                extra = ("--evaluate",) if cfg.eval.sampling_seed is not None else ()
+                run("benchmarks.train", arm, args.tier, seed, args.overrides, *extra, deadline=deadline)
+                if extra:
+                    continue
             run("benchmarks.evaluate", arm, args.tier, seed, args.overrides, deadline=deadline)
 
 
@@ -90,8 +95,9 @@ def _finished(cfg) -> bool:
     completed = cfg.run_dir / "training_complete.json"
     if completed.exists():
         return json.loads(completed.read_text()).get("config_fingerprint") == config_fingerprint(cfg)
-    if cfg.train.max_seconds:
+    if cfg.train.max_seconds or cfg.train.reward_mode == "step":
         # A killed budgeted run can have all metric rows but an unfinished adapter save.
+        # Corrected protocols always require the marker written after the final save.
         return False
     m = cfg.run_dir / "metrics.jsonl"
     return m.exists() and sum(1 for _ in m.open()) >= cfg.train.iterations

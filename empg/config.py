@@ -33,8 +33,11 @@ class TrainConfig:
     reward_mode: str = "trajectory"  # legacy episode penalties | verl step scores/group normalization
     clip_low: float = 0.2
     clip_high: float = 0.2       # > clip_low gives DAPO's clip-higher
+    dual_clip: float = 0.0       # 0: legacy PPO; pinned Verl actor bounds negative advantages at 3
     ppo_epochs: int = 1
     mini_batches: int = 4        # optimizer steps per epoch
+    mini_batch_size: int = 0     # response rows per optimizer step; 0 uses legacy mini_batches
+    shuffle: bool = True        # legacy random rows; pinned actor uses sequential minibatches
     max_grad_norm: float = 1.0
     save_every: int = 25
     max_env_steps: int = 0       # stop at a batch boundary; 0 = iterations only
@@ -48,6 +51,7 @@ class EvalConfig:
     max_steps: int = 50
     greedy: bool = True
     temperature: float | None = None  # stochastic eval override; None preserves policy temperature
+    sampling_seed: int | None = None  # explicit eval RNG, independent of training consumption
     batch_envs: int = 32
     selection: str = "random"   # random | stratified (proportional task-type allocation)
     selection_seed: int = 0     # independent of training seed, shared by all arms
@@ -74,9 +78,11 @@ def _optional_defaults(data: dict) -> dict:
     """Keep legacy artifact fingerprints valid when new options are disabled."""
     result = dict(data)
     for section, defaults in {
-        "train": {"entropy_coef": 0.0, "reward_mode": "trajectory"},
-        "policy": {"amp": False, "vllm_max_num_seqs": 256},
-        "eval": {"temperature": None},
+        "train": {"entropy_coef": 0.0, "reward_mode": "trajectory", "mini_batch_size": 0,
+                  "shuffle": True, "dual_clip": 0.0},
+        "policy": {"amp": False, "vllm_max_num_seqs": 256, "max_prompt_tokens": 0},
+        "eval": {"temperature": None, "sampling_seed": None},
+        "advantage": {"entropy_eps": 1e-6, "scale_eps": 0.0},
     }.items():
         if section in result:
             result[section] = dict(result[section])

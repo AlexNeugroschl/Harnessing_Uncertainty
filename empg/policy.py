@@ -46,6 +46,7 @@ class PolicyConfig:
     gradient_checkpointing: bool = True
     amp: bool = False           # CUDA bf16 autocast; retains FP32 LoRA master parameters
     max_new_tokens: int = 256
+    max_prompt_tokens: int = 0  # 0 preserves legacy; paper framework errors above 2048
     temperature: float = 1.0
     top_p: float = 1.0
     gen_batch_size: int = 32     # prompts per generate() call
@@ -66,6 +67,11 @@ class LLMPolicy:
     def __init__(self, cfg: PolicyConfig, device: str | None = None, seed: int = 0):
         if cfg.backend not in ("hf", "vllm"):
             raise ValueError(f"unknown policy.backend {cfg.backend!r}")
+        if min(cfg.gen_batch_size, cfg.micro_batch_size, cfg.max_new_tokens) < 1 or cfg.max_prompt_tokens < 0:
+            raise ValueError("policy batch sizes/response limit must be positive; prompt limit nonnegative")
+        if cfg.backend == "vllm" and importlib.util.find_spec("vllm") is None:
+            raise RuntimeError("vLLM is not installed in this interpreter. Use ~/venvs/empg-vllm "
+                               "or override policy.backend=hf; see README.")
         self.cfg = cfg
         self.seed = seed
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
@@ -100,18 +106,74 @@ class LLMPolicy:
         self._lora_request = None
         self._lora_id = 0
         self._adapter_dir = None
+        self._adapter_tmp = None
+        self._engine_asleep = False
+        self._closed = False
+        self._sampling_seed = None
+        self._sampling_calls = 0
 
     # ------------------------------------------------------------------ io
     def encode_prompt(self, prompt: str) -> list[int]:
         text = self.tokenizer.apply_chat_template(
             [{"role": "user", "content": prompt}], tokenize=False, add_generation_prompt=True)
-        return self.tokenizer(text, add_special_tokens=False)["input_ids"]
+        ids = self.tokenizer(text, add_special_tokens=False)["input_ids"]
+        if self.cfg.max_prompt_tokens and len(ids) > self.cfg.max_prompt_tokens:
+            raise ValueError(f"Prompt has {len(ids)} tokens, exceeding policy.max_prompt_tokens="
+                             f"{self.cfg.max_prompt_tokens}. No prompt was silently truncated.")
+        return ids
+
+    @contextmanager
+    def sampling(self, seed: int):
+        """Reproducible evaluation, including when the engine was used to train."""
+        previous = self._sampling_seed, self._sampling_calls
+        self._sampling_seed, self._sampling_calls = seed, 0
+        devices = [torch.device(self.device)] if torch.device(self.device).type == "cuda" else []
+        try:
+            with torch.random.fork_rng(devices=devices):
+                torch.manual_seed(seed)
+                yield
+        finally:
+            self._sampling_seed, self._sampling_calls = previous
+
+    def close(self):
+        """Release the inference worker and our temporary adapter directory once."""
+        if self._closed:
+            return
+        if self._in_generation:
+            raise RuntimeError("cannot close a policy during generation")
+        self._closed = True
+        engine, self._llm = self._llm, None
+        try:
+            if engine is not None:
+                # The allocator must own mapped storage when its worker tears down.
+                # Make room before waking it; never hold the HF model on GPU too.
+                self.model.to("cpu")
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                try:
+                    if self._engine_asleep:
+                        engine.wake_up()
+                finally:
+                    core = getattr(getattr(engine, "llm_engine", None), "engine_core", None)
+                    if core is not None:
+                        core.shutdown(timeout=10)
+                    elif hasattr(engine, "shutdown"):
+                        engine.shutdown()
+        finally:
+            if self._adapter_tmp is not None:
+                self._adapter_tmp.cleanup()
+                self._adapter_tmp = None
+            self._adapter_dir = None
 
     def parameters(self):
         return [p for p in self.model.parameters() if p.requires_grad]
 
     def save(self, path: str):
-        self.model.save_pretrained(path)
+        # This policy never resizes the vocabulary or trains base embeddings.
+        # PEFT's "auto" mode otherwise checks the Hub config on every adapter
+        # save (including every vLLM rollout), despite the base being frozen.
+        kwargs = {"save_embedding_layers": False} if self.use_lora else {}
+        self.model.save_pretrained(path, **kwargs)
 
     def load_adapter(self, path: str):
         from peft import set_peft_model_state_dict
@@ -122,6 +184,8 @@ class LLMPolicy:
     @contextmanager
     def generation(self):
         """Wraps one rollout's generate() calls. Nested sessions are no-ops."""
+        if self._closed:
+            raise RuntimeError("policy is closed")
         if self._in_generation:
             yield
             return
@@ -204,11 +268,16 @@ class LLMPolicy:
             self._llm = self._make_llm()
         else:
             self._llm.wake_up()
+        self._engine_asleep = False
         if self.use_lora:
             # A fresh id every session: the adapter may have changed since the last
             # one, and a woken engine must not reuse LoRA slots it had before sleeping.
             from vllm.lora.request import LoRARequest
-            self._adapter_dir = self._adapter_dir or tempfile.mkdtemp(prefix="empg_adapter_")
+            if self._adapter_tmp is None:
+                self._adapter_tmp = tempfile.TemporaryDirectory(prefix="empg_adapter_")
+                self._adapter_dir = self._adapter_tmp.name
+            if self._lora_request is not None:
+                self._llm.llm_engine.remove_lora(self._lora_id)
             self.save(self._adapter_dir)
             self._lora_id += 1
             self._lora_request = LoRARequest(f"policy_{self._lora_id}", self._lora_id,
@@ -216,6 +285,7 @@ class LLMPolicy:
 
     def _vllm_sleep(self):
         self._llm.sleep(level=1)  # weights to CPU, KV cache freed
+        self._engine_asleep = True
         self.model.to(self.device)
 
     def _make_llm(self):
@@ -237,7 +307,11 @@ class LLMPolicy:
     def _vllm_generate(self, prompts: list[str], greedy: bool):
         from vllm import SamplingParams
         c = self.cfg
-        params = SamplingParams(max_tokens=c.max_new_tokens,
+        sampling = {}
+        if self._sampling_seed is not None:
+            sampling["seed"] = self._sampling_seed + self._sampling_calls
+            self._sampling_calls += 1
+        params = SamplingParams(max_tokens=c.max_new_tokens, **sampling,
                                 temperature=0.0 if greedy else c.temperature,
                                 top_p=1.0 if greedy else c.top_p)
         p_ids = [self.encode_prompt(p) for p in prompts]

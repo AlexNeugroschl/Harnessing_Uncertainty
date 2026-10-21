@@ -6,7 +6,7 @@ import torch
 
 
 def policy_loss(logp, old_logp, ref_logp, adv, mask, clip_low=0.2, clip_high=0.2,
-                kl_coef=0.01, tensor_stats=False, *, entropy=None, entropy_coef=0.0):
+                kl_coef=0.01, tensor_stats=False, *, entropy=None, entropy_coef=0.0, dual_clip=0.0):
     """Per-token PPO-clip surrogate + k3 KL (verl's ``low_var_kl``).
 
     All tensors are [B, T]. ``adv`` holds each step's advantage broadcast to all
@@ -16,6 +16,10 @@ def policy_loss(logp, old_logp, ref_logp, adv, mask, clip_low=0.2, clip_high=0.2
     """
     ratio = torch.exp(logp - old_logp)
     pg = -torch.minimum(ratio * adv, torch.clamp(ratio, 1 - clip_low, 1 + clip_high) * adv)
+    if dual_clip:
+        if dual_clip <= 1:
+            raise ValueError("dual_clip must exceed 1, or be 0 to disable")
+        pg = torch.where(adv < 0, torch.minimum(pg, -dual_clip * adv), pg)
     per_tok = pg
     kl = torch.zeros_like(logp)
     if kl_coef > 0 and ref_logp is not None:

@@ -39,12 +39,15 @@ def test_episode_length_and_update_shuffle_cannot_change_task_schedule(
                                init_keys={"obs": "start"}) for t, g in zip(tasks, groups)]
 
         def update(policy, opt, trajs, cfg, rng, **k):
+            assert not (cfg.run_dir / "training_complete.json").exists()
             rng.permutation(sum(len(t.steps) for t in trajs))
             return {key: 0.0 for key in ("success", "reward", "ep_len", "invalid_rate",
                     "entropy_mean", "kl", "revisit_rate", "any_success_frac", "resp_len_p99", "trunc_rate")}
 
         monkeypatch.setattr(trainer, "run_episodes", episodes)
         monkeypatch.setattr(trainer, "update", update)
+        cfg.run_dir.mkdir(parents=True, exist_ok=True)
+        (cfg.run_dir / "training_complete.json").write_text('{"reason": "old completed run"}')
         trainer.train(cfg, log=lambda *a: None)
         schedules.append([json.loads(line)["tasks"] for line in
                           (cfg.run_dir / "metrics.jsonl").read_text().splitlines()])

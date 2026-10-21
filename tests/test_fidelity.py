@@ -37,6 +37,21 @@ def test_step_normalization_weights_actual_response_rows():
         compute_advantages([0.], [0], [0, 0], [1., 1.], AdvantageConfig(), step_rewards=[0.])
 
 
+def test_actor_minibatches_use_response_count_and_preserve_sequential_order():
+    from empg.trainer import optimizer_minibatches
+
+    tc = load("empg", "paper_overnight").train
+    rng = np.random.default_rng(42)
+    batches = optimizer_minibatches(601, tc, rng)
+    assert [len(mb) for mb in batches] == [256, 256, 89]
+    np.testing.assert_array_equal(np.concatenate(batches), np.arange(601))
+    assert len(optimizer_minibatches(4, tc, rng)) == 1
+    legacy = load("empg", "overnight_full").train
+    batches = optimizer_minibatches(23, legacy, rng)
+    assert len(batches) == legacy.mini_batches
+    assert sorted(np.concatenate(batches)) == list(range(23))
+
+
 def test_entropy_bonus_has_the_analytic_gradient_and_masks_padding():
     torch.manual_seed(13)
     logits = torch.randn(2, 3, 7, requires_grad=True)
@@ -58,11 +73,28 @@ def test_entropy_bonus_has_the_analytic_gradient_and_masks_padding():
                     kl_coef=0., entropy_coef=coef)
 
 
+def test_reference_dual_clip_only_bounds_negative_advantage_tails():
+    # Negative-A ratio 5 is bounded at 3; ratio 2 keeps its ordinary penalty.
+    # Positive-A ratio 5 retains the ordinary upper PPO clip of 1.2.
+    logp = torch.tensor([[5., 2., 5.]]).log().requires_grad_()
+    old = torch.zeros_like(logp)
+    advantage = torch.tensor([[-1., -1., 1.]])
+    mask = torch.ones_like(logp, dtype=torch.bool)
+    loss, _ = policy_loss(logp, old, None, advantage, mask, kl_coef=0., dual_clip=3.)
+    assert loss.item() == pytest.approx(3. + 2. - 1.2)
+    gradient, = torch.autograd.grad(loss, logp)
+    torch.testing.assert_close(gradient, torch.tensor([[0., 2., 0.]]))
+    legacy, _ = policy_loss(logp, old, None, advantage, mask, kl_coef=0.)
+    assert legacy.item() == pytest.approx(5. + 2. - 1.2)
+
+
 def test_new_options_do_not_invalidate_disabled_legacy_configurations():
     cfg = load("grpo", "overnight_full")
     legacy = dataclasses.asdict(cfg)
-    for section, keys in {"train": ["entropy_coef", "reward_mode"], "policy": ["amp", "vllm_max_num_seqs"],
-                          "eval": ["temperature"]}.items():
+    for section, keys in {"train": ["entropy_coef", "reward_mode", "mini_batch_size", "shuffle", "dual_clip"],
+                          "policy": ["amp", "vllm_max_num_seqs", "max_prompt_tokens"],
+                          "eval": ["temperature", "sampling_seed"],
+                          "advantage": ["entropy_eps", "scale_eps"]}.items():
         for key in keys:
             legacy[section].pop(key)
     expected = hashlib.sha256(json.dumps(legacy, sort_keys=True).encode()).hexdigest()
@@ -79,11 +111,16 @@ def test_paper_lora_preset_is_explicit_and_does_not_replace_overnight():
     cfg = load("empg", "paper_lora")
     assert cfg.train.entropy_coef == .001 and cfg.train.lr == 1e-6
     assert cfg.train.weight_decay == .01
+    assert cfg.train.mini_batch_size == 256 and not cfg.train.shuffle
+    assert cfg.train.dual_clip == 3.
     assert cfg.train.reward_mode == "step"
     assert cfg.train.iterations == 150 and cfg.train.group_size == 8
     assert cfg.train.games_per_iter == 2  # documented local compromise
     assert cfg.policy.lora_r == 16 and cfg.policy.amp
     assert cfg.policy.max_new_tokens == 512
+    assert cfg.policy.max_prompt_tokens == 2048
+    assert cfg.advantage.entropy_eps == cfg.advantage.scale_eps == 1e-8
+    assert cfg.eval.sampling_seed == 0
     assert cfg.eval.max_tasks == 0 and cfg.eval.split == "valid_unseen"
     assert not cfg.eval.greedy and cfg.eval.temperature == .4
     assert cfg.env["action_parser"] == "verl"
@@ -92,6 +129,7 @@ def test_paper_lora_preset_is_explicit_and_does_not_replace_overnight():
     assert fast.train == cfg.train and fast.eval == cfg.eval and fast.env == cfg.env
     assert fast.policy.backend == "vllm" and not fast.policy.vllm_enforce_eager
     assert fast.policy.vllm_max_num_seqs == 32
+    assert fast.policy.vllm_max_model_len == 2560
 
 
 def test_verl_projection_selects_first_action_and_rejects_cjk():

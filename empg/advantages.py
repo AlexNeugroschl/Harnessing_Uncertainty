@@ -40,6 +40,8 @@ class AdvantageConfig:
     k: float = 1.0            # Eq. 10 exponent
     k_prime: float = 1.0      # Eq. 11 exponent
     zeta: float = 0.05        # Eq. 8 bonus weight (0.05 ALFWorld/WebShop, 0.1 Deep Search)
+    entropy_eps: float = EPS  # paper appendix uses 1e-8; legacy normalization uses 1e-6
+    scale_eps: float = 0.0    # paper appendix adds 1e-8 to mean(exp(-k H))
     curiosity: CuriosityConfig = field(default_factory=CuriosityConfig)  # not in the paper
 
 
@@ -67,7 +69,7 @@ def normalize_entropy(h, eps: float = EPS) -> np.ndarray:
     return (h - h.min()) / (h.max() - h.min() + eps)
 
 
-def scale_g(h_norm, k: float = 1.0) -> np.ndarray:
+def scale_g(h_norm, k: float = 1.0, eps: float = 0.0) -> np.ndarray:
     """Eq. 10: g = exp(-k H_norm) / mean_batch exp(-k H_norm).
 
     Mean over the batch is exactly 1, so g redistributes update magnitude from
@@ -75,7 +77,7 @@ def scale_g(h_norm, k: float = 1.0) -> np.ndarray:
     kept: confident errors are penalised harder.
     """
     raw = np.exp(-k * np.asarray(h_norm, dtype=np.float64))
-    return raw / raw.mean()
+    return raw / (raw.mean() + eps)
 
 
 def clarity_f(h_norm_next, k_prime: float = 1.0) -> np.ndarray:
@@ -138,8 +140,8 @@ def compute_advantages(traj_rewards, group_ids, step_traj, step_entropy,
     if cfg.method != "empg":
         raise ValueError(f"unknown advantage method: {cfg.method!r}")
 
-    h_norm = normalize_entropy(step_entropy)
-    a_mod = a_step * scale_g(h_norm, cfg.k) if cfg.use_g else a_step.copy()
+    h_norm = normalize_entropy(step_entropy, cfg.entropy_eps)
+    a_mod = a_step * scale_g(h_norm, cfg.k, cfg.scale_eps) if cfg.use_g else a_step.copy()
     if cfg.use_f:
         a_mod += cfg.zeta * clarity_f(next_step_entropy(h_norm, step_traj), cfg.k_prime)
     if intrinsic is not None:

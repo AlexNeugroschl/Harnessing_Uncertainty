@@ -1,0 +1,8 @@
+# Corrected LoRA protocol with a fixed workload on a single 8 GiB GPU.
+# Default runner selects GRPO + EMPG, one seed, and an 8.5-hour suite deadline.
+# Timing is an extrapolation; the deadline may leave an arm incomplete.
+inherit: paper_lora_fast.yaml
+out_dir: runs/paper_overnight
+train:
+  iterations: 12
+  save_every: 4

@@ -118,7 +118,8 @@ def test_default_is_expanded_single_seed_overnight_with_deadline(monkeypatch, tm
         (tmp_path / "runs/overnight_full").mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(runner, "execute", execute)
-    assert runner.main([]) == 0
+    assert runner.main(["--tier", "overnight_full", "--arms", "grpo", "empg",
+                        "grpo_cur_group", "empg_cur_episodic"]) == 0
     suite = commands[0]
     assert suite[suite.index("--tier") + 1] == "overnight_full"
     assert suite[suite.index("--seeds") + 1:suite.index("--max-seconds")] == ["0"]
@@ -156,7 +157,7 @@ def test_strict_eight_hour_override_preserves_the_expanded_workload(monkeypatch,
     prepare(monkeypatch, tmp_path)
     commands = []
     monkeypatch.setattr(runner, "execute", commands.append)
-    assert runner.main(["--hours", "8"]) == 0
+    assert runner.main(["--tier", "overnight_full", "--hours", "8"]) == 0
     suite = commands[0]
     assert float(suite[suite.index("--max-seconds") + 1]) == 8 * 3600
     manifest = json.loads((tmp_path / "results/overnight_full/benchmark_run.json").read_text())
@@ -167,7 +168,7 @@ def test_strict_eight_hour_override_preserves_the_expanded_workload(monkeypatch,
 
 def test_deadline_generates_partial_tables_and_returns_124(monkeypatch, tmp_path):
     prepare(monkeypatch, tmp_path)
-    (tmp_path / "runs/overnight_full").mkdir(parents=True)
+    (tmp_path / "runs/paper_overnight").mkdir(parents=True)
     commands = []
 
     def execute(cmd):
@@ -178,9 +179,37 @@ def test_deadline_generates_partial_tables_and_returns_124(monkeypatch, tmp_path
     monkeypatch.setattr(runner, "execute", execute)
     assert runner.main([]) == 124
     assert "benchmarks.report" in commands[-1]
-    manifest = json.loads((tmp_path / "results/overnight_full/benchmark_run.json").read_text())
+    manifest = json.loads((tmp_path / "results/paper_overnight/benchmark_run.json").read_text())
     assert manifest["status"] == "deadline_reached"
     assert manifest["report_status"] == "complete"
+
+
+def test_default_uses_corrected_fast_lora_comparison(monkeypatch, tmp_path):
+    prepare(monkeypatch, tmp_path)
+    commands = []
+    monkeypatch.setattr(runner, "execute", commands.append)
+    assert runner.main([]) == 0
+    manifest = json.loads((tmp_path / "results/paper_overnight/benchmark_run.json").read_text())
+    assert manifest["arms"] == ["grpo", "empg"] and manifest["seeds"] == [0]
+    assert manifest["hours"] == 8.5
+    for cfg in manifest["configs"]:
+        assert cfg["train"]["reward_mode"] == "step" and cfg["train"]["entropy_coef"] == .001
+        assert cfg["train"]["iterations"] == 12 and cfg["train"]["group_size"] == 8
+        assert cfg["policy"]["backend"] == "vllm" and cfg["policy"]["amp"]
+        assert cfg["eval"]["max_tasks"] == 0 and cfg["eval"]["sampling_seed"] == 0
+    assert not (tmp_path / "results/overnight_full").exists()
+
+
+@pytest.mark.parametrize("args,venv", [([], "empg-vllm"), (["--tier", "overnight_full"], "empg"),
+                                      (["--tier=paper_lora_fast"], "empg-vllm"),
+                                      (["--", "policy.backend=hf"], "empg")])
+def test_windows_selects_interpreter_for_backend(monkeypatch, args, venv):
+    monkeypatch.setattr(runner, "ROOT", Path("C:/Project/Harnessing_Uncertainty"))
+    monkeypatch.delenv("EMPG_WSL_PYTHON", raising=False)
+    commands = []
+    monkeypatch.setattr(runner.subprocess, "call", lambda cmd: commands.append(cmd) or 0)
+    runner.launch_in_wsl(args)
+    assert f"$HOME/venvs/{venv}/bin/python" in commands[0][commands[0].index("-lc") + 1]
 
 
 def test_generation_estimate_uses_supplied_trajectories_not_just_batch_ceiling():
@@ -213,3 +242,12 @@ def test_evaluation_estimate_accounts_for_partial_final_batch(monkeypatch):
     last = runner.estimate(cfg, train=False)
     assert full["evaluation_seconds"] == pytest.approx(
         first["evaluation_seconds"] + last["evaluation_seconds"])
+
+
+def test_corrected_runtime_uses_full_horizon_probe_without_double_charging_token_cap():
+    cfg = load("empg", "paper_overnight", ["train.iterations=1"])
+    estimate = runner.estimate(cfg, evaluate=False)
+    expected = 232.511240086 + 551.638224246 + 800 * (2.51 / 80) + 12.72 + 20
+    assert estimate["training_seconds"] == pytest.approx(expected)
+    cfg.policy.max_new_tokens = 768
+    assert runner.estimate(cfg, evaluate=False)["training_seconds"] > estimate["training_seconds"]

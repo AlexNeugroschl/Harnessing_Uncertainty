@@ -56,16 +56,20 @@ def evaluate(policy: LLMPolicy, cfg: Config, log=print) -> tuple[dict, dict]:
     if not ec.greedy and ec.temperature is not None and (
             not np.isfinite(ec.temperature) or ec.temperature <= 0):
         raise ValueError("stochastic eval.temperature must be finite and positive")
-    bench = make_benchmark(cfg.benchmark, **cfg.env)
-    tasks = select_tasks(bench.tasks(ec.split), bench, ec)
-    if not tasks:
-        raise ValueError("empty evaluation split")
+    if ec.sampling_seed is not None and (not isinstance(ec.sampling_seed, int) or ec.sampling_seed < 0):
+        raise ValueError("eval.sampling_seed must be a nonnegative integer or null")
     by_type = defaultdict(list)
     per_task = []
     lengths = {"len": [], "truncated": [], "valid": []}
     with ExitStack() as cleanup:
+        bench = make_benchmark(cfg.benchmark, **cfg.env)
         if hasattr(bench, "close"):
             cleanup.callback(bench.close)
+        tasks = select_tasks(bench.tasks(ec.split), bench, ec)
+        if not tasks:
+            raise ValueError("empty evaluation split")
+        if ec.sampling_seed is not None:
+            cleanup.enter_context(policy.sampling(ec.sampling_seed))
         if not ec.greedy and ec.temperature is not None:
             original = policy.cfg
             policy.cfg = dataclasses.replace(original, temperature=ec.temperature)
@@ -99,6 +103,10 @@ def evaluate(policy: LLMPolicy, cfg: Config, log=print) -> tuple[dict, dict]:
         res["protocol"]["temperature"] = ec.temperature
     if cfg.env.get("action_parser", "strict") != "strict":
         res["protocol"]["action_parser"] = cfg.env["action_parser"]
+    if ec.sampling_seed is not None:
+        res["protocol"]["sampling_seed"] = ec.sampling_seed
+    if cfg.policy.max_prompt_tokens:
+        res["protocol"]["max_prompt_tokens"] = cfg.policy.max_prompt_tokens
     return res, {"cap": policy.cfg.max_new_tokens, **lengths}
 
 
@@ -107,18 +115,10 @@ def eval_path(cfg: Config, base: bool = False) -> Path:
     return root / f"eval_{cfg.eval.split}.json"
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    add_args(ap)
-    ap.add_argument("--base", action="store_true", help="evaluate the untrained model")
-    args = ap.parse_args()
-    cfg = load(args.config, args.tier, args.overrides, args.seed)
-    seed_everything(cfg.seed)
-    policy = LLMPolicy(cfg.policy, seed=cfg.seed)
-    if not args.base:
-        policy.load_adapter(str(cfg.run_dir / "adapter"))
+def save_evaluation(policy: LLMPolicy, cfg: Config, base: bool = False):
+    """Evaluate an already-loaded model and atomically publish complete artifacts."""
     res, lengths = evaluate(policy, cfg)
-    out = eval_path(cfg, args.base)
+    out = eval_path(cfg, base)
     out.parent.mkdir(parents=True, exist_ok=True)
     length_out = out.parent / f"resp_lengths_eval_{cfg.eval.split}.json"
     temporary = length_out.with_suffix(".json.tmp")
@@ -130,6 +130,23 @@ def main():
     temporary.write_text(json.dumps(res, indent=2))
     temporary.replace(out)
     print(json.dumps(res, indent=2))
+    return res
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    add_args(ap)
+    ap.add_argument("--base", action="store_true", help="evaluate the untrained model")
+    args = ap.parse_args()
+    cfg = load(args.config, args.tier, args.overrides, args.seed)
+    seed_everything(cfg.seed)
+    policy = LLMPolicy(cfg.policy, seed=cfg.seed)
+    try:
+        if not args.base:
+            policy.load_adapter(str(cfg.run_dir / "adapter"))
+        save_evaluation(policy, cfg, args.base)
+    finally:
+        policy.close()
 
 
 if __name__ == "__main__":

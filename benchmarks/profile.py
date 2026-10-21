@@ -3,8 +3,8 @@
     python -m benchmarks.profile --config empg --tier small --env-only
     python -m benchmarks.profile --config empg --tier small --turns 3 --samples 8
 
-The second command compares dense/chunked updates on the very same real rollout,
-restoring the adapter and optimizer initialization between measurements.
+The second command measures the configured implementation on a real rollout.
+Use --compare-dense explicitly for the more expensive dense/chunked comparison.
 """
 
 import argparse
@@ -63,32 +63,47 @@ def environment_profile(cfg, tasks, turns, workers):
     return records
 
 
-def update_profile(cfg, tasks, turns, repeats=2):
-    import torch
-    from empg.envs.base import make_benchmark
+def update_profile(cfg, tasks, turns, repeats=1, compare_dense=False):
     from empg.policy import LLMPolicy
-    from empg.rollout import run_episodes
-    from empg.trainer import seed_everything, update
+    from empg.trainer import seed_everything
 
     seed_everything(cfg.seed)
-    bench = make_benchmark(cfg.benchmark, **cfg.env)
     policy = LLMPolicy(cfg.policy, seed=cfg.seed)
     try:
+        return _measure_updates(policy, cfg, tasks, turns, repeats, compare_dense)
+    finally:
+        policy.close()
+
+
+def _measure_updates(policy, cfg, tasks, turns, repeats, compare_dense):
+    import torch
+    from empg.envs.base import make_benchmark
+    from empg.rollout import run_episodes
+    from empg.trainer import update
+
+    bench = make_benchmark(cfg.benchmark, **cfg.env)
+    try:
         times = {}
-        # All samples are siblings of one game; force a mixed reward below to
-        # benchmark nonzero gradients independently of early policy success.
-        trajs = run_episodes(policy, bench, [tasks[0]] * len(tasks), [0] * len(tasks),
-                             turns, timings=times)
+        groups = [i // cfg.train.group_size for i in range(len(tasks))]
+        episode_tasks = [tasks[g * cfg.train.group_size] for g in groups]
+        start = time.perf_counter()
+        trajs = run_episodes(policy, bench, episode_tasks, groups, turns, timings=times,
+                             progress=lambda turn, active: print(
+                                 f"  profile turn {turn}/{turns}, {active} active", flush=True))
+        times["t_rollout_wall"] = time.perf_counter() - start
         print(json.dumps({"rollout": times}), flush=True)
     finally:
         if hasattr(bench, "close"):
             bench.close()
-    trajs[0].reward = 10.0
-    trajs[1].reward = 0.0
+    if compare_dense:
+        # Only equivalence probes inject signal; ordinary timings use real outcomes.
+        trajs[0].reward, trajs[0].won = 10.0, True
+        trajs[1].reward, trajs[1].won = 0.0, False
     saved = [p.detach().cpu().clone() for p in policy.parameters()]
     records, result_weights = [], []
     for repeat, chunked in [(repeat, chunked) for repeat in range(repeats)
-                            for chunked in ((False, True) if repeat % 2 == 0 else (True, False))]:
+                            for chunked in (((False, True) if repeat % 2 == 0 else (True, False))
+                                            if compare_dense else (cfg.policy.chunked_head,))]:
         print(f"profiling update, chunked_head={chunked}", flush=True)
         with torch.no_grad():
             for p, initial in zip(policy.parameters(), saved):
@@ -106,16 +121,21 @@ def update_profile(cfg, tasks, turns, repeats=2):
             torch.cuda.synchronize()
         row = dict(chunked=chunked, repeat=repeat, seconds=time.perf_counter() - start,
                    peak_allocated_gib=torch.cuda.max_memory_allocated() / 2**30
+                   if torch.cuda.is_available() else 0.0,
+                   peak_reserved_gib=torch.cuda.max_memory_reserved() / 2**30
                    if torch.cuda.is_available() else 0.0, stats=stats)
         if repeat == 0:
             result_weights.append([p.detach().cpu().clone() for p in policy.parameters()])
         records.append(row)
         print(json.dumps(row), flush=True)
         del optimizer
-    max_delta = max((a - b).abs().max().item()
-                    for a, b in zip(*result_weights))
+    max_delta = (max((a - b).abs().max().item() for a, b in zip(*result_weights))
+                 if compare_dense else None)
     return {"rollout": times, "updates": records, "adapter_max_abs_delta": max_delta,
-            "note": "Mixed rewards injected for performance/gradient checks; not research evidence."}
+            "max_prompt_tokens_observed": max(len(s.prompt_ids) for tr in trajs for s in tr.steps),
+            "max_response_tokens_observed": max(len(s.response_ids) for tr in trajs for s in tr.steps),
+            "note": ("Mixed rewards injected for gradient equivalence; not research evidence."
+                     if compare_dense else "Configured implementation and real outcomes; timing probe only.")}
 
 
 def main():
@@ -126,7 +146,9 @@ def main():
     mode.add_argument("--model-only", action="store_true")
     ap.add_argument("--turns", type=int, default=5)
     ap.add_argument("--samples", type=int, default=16)
-    ap.add_argument("--repeats", type=int, default=2, help="alternating-order GPU measurements")
+    ap.add_argument("--repeats", type=int, default=1, help="repeat updates with restored adapter weights")
+    ap.add_argument("--compare-dense", action="store_true",
+                    help="also run dense reference updates; costs extra time and VRAM")
     ap.add_argument("--workers", type=int, nargs="+", default=[0, 4])
     ap.add_argument("--out", default="runs/audit/profile.json")
     args = ap.parse_args()
@@ -138,13 +160,16 @@ def main():
     from empg.envs.base import make_benchmark
     bench = make_benchmark(cfg.benchmark, **cfg.env)
     available = bench.tasks("train")
+    if hasattr(bench, "close"):
+        bench.close()
     tasks = [available[i] for i in np.random.default_rng(0).choice(
         len(available), args.samples, replace=False)]
-    results = {}
+    from empg.config import config_dict
+    results = {"config": config_dict(cfg)}
     if not args.model_only:
         results["environment"] = environment_profile(cfg, tasks, args.turns, args.workers)
     if not args.env_only:
-        results["model"] = update_profile(cfg, tasks, args.turns, args.repeats)
+        results["model"] = update_profile(cfg, tasks, args.turns, args.repeats, args.compare_dense)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(results, indent=2))

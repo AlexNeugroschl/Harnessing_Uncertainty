@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 import json
 import random
 import time
@@ -32,10 +32,27 @@ def _right_aligned(rows: list[torch.Tensor], T: int, device) -> torch.Tensor:
     return out.to(device)
 
 
+def optimizer_minibatches(n_steps, tc, rng):
+    order = rng.permutation(n_steps) if tc.shuffle else np.arange(n_steps)
+    if tc.mini_batch_size:
+        return [order[s:s + tc.mini_batch_size] for s in range(0, n_steps, tc.mini_batch_size)]
+    return [mb for mb in np.array_split(order, tc.mini_batches) if len(mb)]
+
+
 # Exploration metrics always use the non-privileged key, so every arm is measured
 # the same way whatever key its curiosity bonus uses. Envs without state keys
 # fall back to the observation text.
 METRICS_KEY = "parsed"
+
+
+@contextmanager
+def _close_policy_on_error(policy):
+    try:
+        yield
+    except BaseException:
+        if hasattr(policy, "close"):
+            policy.close()
+        raise
 
 
 def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
@@ -78,7 +95,7 @@ def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
     if cur.weight != 0:
         intrinsic = intrinsic_rewards(
             [tr.key_seq(cur.key) for tr in trajs], groups, won, cur, iteration,
-            tc.iterations, h_norm=normalize_entropy(step_h))
+            tc.iterations, h_norm=normalize_entropy(step_h, cfg.advantage.entropy_eps))
     adv = compute_advantages([tr.reward for tr in trajs], groups, step_traj, step_h,
                              cfg.advantage, intrinsic=intrinsic, step_rewards=step_rewards)
 
@@ -92,9 +109,7 @@ def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
     sums = {"pg": 0.0, "kl": 0.0, "clipfrac": 0.0, "tokens": 0}
     grad_norms = []
     for _ in range(tc.ppo_epochs):
-        for mb in np.array_split(rng.permutation(len(steps)), tc.mini_batches):
-            if len(mb) == 0:
-                continue
+        for mb in optimizer_minibatches(len(steps), tc, rng):
             n_tok = sum(len(R[i]) for i in mb)
             # Keep random minibatch membership and token-mean weighting, while
             # reducing padding inside its gradient-accumulation microbatches.
@@ -110,7 +125,7 @@ def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
                 a = torch.tensor(adv[idx], dtype=torch.float32, device=dev)[:, None].expand(-1, T)
                 loss, st = policy_loss(logp, old, ref, a, mask, tc.clip_low, tc.clip_high,
                                        tc.kl_coef, tensor_stats=True, entropy=entropy,
-                                       entropy_coef=tc.entropy_coef)
+                                       entropy_coef=tc.entropy_coef, dual_clip=tc.dual_clip)
                 (loss / n_tok).backward()
                 for k in ("pg", "kl", "clipfrac"):
                     sums[k] += st[k]
@@ -156,6 +171,7 @@ def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
         "clipfrac": float(sums["clipfrac"] / n),
         "grad_norm": float(np.mean(grad_norms)) if grad_norms else 0.0,
         "n_steps": len(steps),
+        "optimizer_steps": len(grad_norms),
     }
 
 
@@ -183,12 +199,19 @@ def train(cfg: Config, log=print) -> LLMPolicy:
         raise ValueError("training counts/horizon must be positive")
     if tc.group_size < 2:
         raise ValueError("GRPO comparisons require group_size >= 2")
+    if tc.mini_batch_size < 0:
+        raise ValueError("train.mini_batch_size must be nonnegative")
+    if not np.isfinite(tc.dual_clip) or (tc.dual_clip != 0 and tc.dual_clip <= 1):
+        raise ValueError("train.dual_clip must exceed 1, or be 0 to disable")
     if tc.max_env_steps < 0 or tc.max_seconds < 0:
         raise ValueError("training budgets must be nonnegative")
     if not np.isfinite(tc.entropy_coef) or tc.entropy_coef < 0:
         raise ValueError("train.entropy_coef must be finite and nonnegative")
     if tc.reward_mode not in ("trajectory", "step"):
         raise ValueError("train.reward_mode must be 'trajectory' or 'step'")
+    if (not np.isfinite(cfg.advantage.entropy_eps) or cfg.advantage.entropy_eps <= 0 or
+            not np.isfinite(cfg.advantage.scale_eps) or cfg.advantage.scale_eps < 0):
+        raise ValueError("advantage entropy_eps must be positive and scale_eps nonnegative")
     if cfg.policy.temperature != 1.0 or cfg.policy.top_p != 1.0:
         raise ValueError("on-policy training requires temperature=1 and top_p=1")
     seed_everything(cfg.seed)
@@ -199,6 +222,9 @@ def train(cfg: Config, log=print) -> LLMPolicy:
     if saved_config.exists() and not config_matches(json.loads(saved_config.read_text()), cfg):
         raise ValueError(f"{run_dir} contains a different configuration; choose a new name= or out_dir=")
     run_dir.mkdir(parents=True, exist_ok=True)
+    # An explicitly restarted run must not retain a previous completion marker
+    # while its metrics and adapter are being replaced.
+    (run_dir / "training_complete.json").unlink(missing_ok=True)
     (run_dir / "config.json").write_text(json.dumps(config_dict(cfg), indent=2))
 
     bench = make_benchmark(cfg.benchmark, **cfg.env)
@@ -223,6 +249,7 @@ def train(cfg: Config, log=print) -> LLMPolicy:
             open(run_dir / "resp_lengths_train.jsonl", "w") as lf:
         if hasattr(bench, "close"):
             cleanup.callback(bench.close)
+        cleanup.enter_context(_close_policy_on_error(policy))
         for it in range(1, tc.iterations + 1):
             t0 = time.time()
             chosen = task_rng.choice(len(train_tasks), tc.games_per_iter, replace=False)
@@ -264,12 +291,12 @@ def train(cfg: Config, log=print) -> LLMPolicy:
             if tc.max_seconds and cumulative_seconds >= tc.max_seconds:
                 stop_reason = "max_seconds"
                 break
-    policy.save(str(run_dir / "adapter"))
-    completed = run_dir / "training_complete.json"
-    temporary = completed.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps({
-        "config_fingerprint": config_fingerprint(cfg), "reason": stop_reason,
-        "iterations": it, "env_steps": cumulative_steps, "response_tokens": cumulative_tokens,
-        "seconds": cumulative_seconds}, indent=2))
-    temporary.replace(completed)
+        policy.save(str(run_dir / "adapter"))
+        completed = run_dir / "training_complete.json"
+        temporary = completed.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps({
+            "config_fingerprint": config_fingerprint(cfg), "reason": stop_reason,
+            "iterations": it, "env_steps": cumulative_steps, "response_tokens": cumulative_tokens,
+            "seconds": cumulative_seconds}, indent=2))
+        temporary.replace(completed)
     return policy

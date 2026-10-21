@@ -4,7 +4,8 @@
     python run_benchmarks.py
     python run_benchmarks.py --tier pilot --arms grpo grpo_cur_episodic --seeds 0
 
-On Windows, forwards to Ubuntu-24.04 and ~/venvs/empg in WSL. Set
+On Windows, forwards to Ubuntu-24.04, selecting ~/venvs/empg-vllm for fast tiers
+and ~/venvs/empg for HF tiers. Set
 EMPG_WSL_DISTRO / EMPG_WSL_PYTHON to use another distro / Linux Python path.
 """
 
@@ -22,6 +23,7 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parent
+DEFAULT_TIER = "paper_overnight"
 
 # Comment/uncomment one line per method to choose the default experiment.
 # --arms overrides this list. The untrained base model is evaluated separately
@@ -30,8 +32,8 @@ ROOT = Path(__file__).resolve().parent
 ENABLED_METHODS = [
     "grpo",                   # Regular GRPO: outcome-reward baseline.
     "empg",                   # EMPG: entropy scaling + future clarity.
-    "grpo_cur_group",         # Curiosity: explore states few sibling rollouts reach.
-    "empg_cur_episodic",      # Curiosity + EMPG: test novelty alongside clarity.
+    # "grpo_cur_group",       # Optional extension after the GRPO/EMPG comparison.
+    # "empg_cur_episodic",    # Optional extension after the GRPO/EMPG comparison.
     # "grpo_cur_episodic",     # Per-episode novelty; next control for novelty scope.
     # "grpo_memory",           # Visited-location prompt; control for forgetting.
     # "grpo_cur_oracle",       # Privileged physical-state novelty diagnostic.
@@ -48,8 +50,19 @@ def launch_in_wsl(argv):
     linux_root = "/mnt/" + root.drive[0].lower() + "/" + "/".join(root.parts[1:])
     # Paths and user arguments remain separate argv items, never shell source.
     python = os.environ.get("EMPG_WSL_PYTHON")
+    tier = DEFAULT_TIER
+    for i, arg in enumerate(argv):
+        if arg == "--tier" and i + 1 < len(argv):
+            tier = argv[i + 1]
+        elif arg.startswith("--tier="):
+            tier = arg.split("=", 1)[1]
+    backend = "vllm" if tier in ("paper_lora_fast", "paper_overnight") else "hf"
+    for arg in argv:
+        if arg.startswith("policy.backend="):
+            backend = arg.split("=", 1)[1]
+    venv = "empg-vllm" if backend == "vllm" else "empg"
     invocation = ([python, "run_benchmarks.py", *argv] if python else
-                  ["bash", "-lc", 'exec "$HOME/venvs/empg/bin/python" "$@"',
+                  ["bash", "-lc", f'exec "$HOME/venvs/{venv}/bin/python" "$@"',
                    "run_benchmarks", "run_benchmarks.py", *argv])
     cmd = ["wsl.exe", "--distribution", os.environ.get("EMPG_WSL_DISTRO", "Ubuntu-24.04"),
            "--cd", linux_root, "--exec", *invocation]
@@ -77,7 +90,23 @@ def estimate(cfg, *, train=True, evaluate=True):
     """
     tokens = max(0.1, min(1., cfg.policy.max_new_tokens / 92.45))
     if cfg.policy.max_new_tokens > 256:
-        tokens *= cfg.policy.max_new_tokens / 256
+        # Roughly 3% of old eval responses reached 256; a larger ceiling does
+        # not double every response. Charge those tails for the whole extension.
+        tokens *= 1 + .03 * (cfg.policy.max_new_tokens - 256) / 92.45
+    compiled = cfg.policy.backend == "vllm" and not cfg.policy.vllm_enforce_eager
+    decode_speedup = 3. if compiled else 1.  # short probes: 2.4-4.5x, not suite timings
+    full_horizon_calibration = (compiled and cfg.policy.amp and cfg.policy.chunked_head
+                               and cfg.policy.model_name == "Qwen/Qwen2.5-1.5B-Instruct"
+                               and cfg.policy.micro_batch_size == 2
+                               and cfg.train.entropy_coef == .001)
+    if full_horizon_calibration:
+        # Real 16-trajectory, 50-turn batch: 800 responses, mean length 92.86,
+        # decode 232.51s, update 551.64s. Includes exact entropy regularization.
+        # The 512-token cap is already represented, so do not charge it twice.
+        tokens = max(.1, min(1., cfg.policy.max_new_tokens / 92.85875))
+        if cfg.policy.max_new_tokens > 512:
+            tokens *= 1 + .03 * (cfg.policy.max_new_tokens - 512) / 92.85875
+        decode_speedup = (50.616117672 / 80) / (232.511240086 / 800)
     workers = int(cfg.env.get("workers", 0))
     env_scale = 1. if workers >= 4 else (2.82 if workers <= 1 else 4. / workers)
     episodes = cfg.train.games_per_iter * cfg.train.group_size
@@ -85,11 +114,20 @@ def estimate(cfg, *, train=True, evaluate=True):
     # gen_batch_size is a ceiling: it cannot fill missing trajectory slots.
     active_batch = min(episodes, cfg.policy.gen_batch_size, 16)
     generation_rate = (50.616117672 / 80) * (16 / max(1, active_batch)) ** .365
+    generation_rate /= decode_speedup
     update_rate = 51.082308316 / 80 * cfg.train.ppo_epochs
+    if cfg.policy.amp:
+        update_rate /= 1.17
+    if cfg.train.entropy_coef:
+        update_rate *= 1.1
+    if full_horizon_calibration:
+        update_rate = 551.638224246 / 800 * cfg.train.ppo_epochs
     if not cfg.policy.chunked_head:
         update_rate = 43.61 / 24 * cfg.train.ppo_epochs
     batch_seconds = (steps * ((generation_rate + update_rate) * tokens + 2.51 / 80 * env_scale)
                      + episodes * 12.72 / 16 * env_scale)
+    if cfg.policy.backend == "vllm":
+        batch_seconds += 20.  # weight transfers, sleep/wake, adapter publication
     batches = cfg.train.iterations
     if cfg.train.max_env_steps:
         batches = min(batches, max(1, (cfg.train.max_env_steps + steps - 1) // steps))
@@ -114,11 +152,13 @@ def estimate(cfg, *, train=True, evaluate=True):
             chunk = min(cfg.eval.batch_envs, task_count - start)
             for offset in range(0, chunk, cfg.policy.gen_batch_size):
                 n = min(cfg.policy.gen_batch_size, chunk - offset)
-                rate = .65 * (24 / min(n, 32)) ** .5
+                rate = .65 * (24 / min(n, 32)) ** .5 / decode_speedup
                 evaluation += n * cfg.eval.max_steps * (
                     rate * tokens + 2.51 / 80 * env_scale)
         evaluation += task_count * 12.72 / 16 * env_scale
-    central = training + evaluation + 30 * (int(train) + int(evaluate))
+    startup = 75 if cfg.policy.backend == "vllm" else 30
+    phases = 1 if train and evaluate and cfg.eval.sampling_seed is not None else int(train) + int(evaluate)
+    central = training + evaluation + startup * phases
     return {"seconds": central, "low_seconds": central * .5, "high_seconds": central * 1.5,
             "training_seconds": training, "evaluation_seconds": evaluation,
             "eval_tasks": task_count, "training_steps_at_caps": batches * steps if train else 0}
@@ -138,13 +178,13 @@ def main(argv=None):
     from benchmarks.suite import _finished, _matching_eval
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--tier", choices=tiers(), default="overnight_full")
+    ap.add_argument("--tier", choices=tiers(), default=DEFAULT_TIER)
     ap.add_argument("--arms", nargs="+", choices=list(arms()),
                     help="override the uncommented ENABLED_METHODS lines at the top of this file")
     ap.add_argument("--seeds", nargs="+", type=int,
-                    help="default: 0 for overnight_full/overnight/pilot/small/smoke; 0 1 2 for full/reduced")
+                    help="default: 0 for local overnight/pilot tiers; 0 1 2 for full/reduced/paper_lora[_fast]")
     ap.add_argument("--hours", type=float,
-                    help="training/evaluation deadline; default 8.5 for overnight_full, 8 for overnight, 0 (unlimited) otherwise")
+                    help="training/evaluation deadline; default 8.5 for paper_overnight/overnight_full, 8 for overnight, 0 otherwise")
     ap.add_argument("--runs", help="run directory (default runs/<tier>)")
     ap.add_argument("--out", help="report directory (default results/<tier>)")
     ap.add_argument("--baseline", default="grpo", choices=list(arms()))
@@ -155,9 +195,9 @@ def main(argv=None):
     ap.add_argument("overrides", nargs="*", help="shared dotted config overrides; precede with -- after --seeds/--arms")
     args = ap.parse_args(argv)
     if args.seeds is None:
-        args.seeds = [0, 1, 2] if args.tier in ("full", "reduced") else [0]
+        args.seeds = [0, 1, 2] if args.tier in ("full", "reduced", "paper_lora", "paper_lora_fast") else [0]
     if args.hours is None:
-        args.hours = {"overnight_full": 8.5, "overnight": 8.}.get(args.tier, 0.)
+        args.hours = {"paper_overnight": 8.5, "overnight_full": 8.5, "overnight": 8.}.get(args.tier, 0.)
     if not math.isfinite(args.hours) or args.hours < 0:
         ap.error("--hours must be finite and nonnegative (0 disables the deadline)")
     if args.arms is None:
@@ -217,12 +257,20 @@ def main(argv=None):
           "real 16-trajectory probe and completed overnight run. "
           "Range models early finishes / timing variation; it is not a measured confidence interval. "
           "Longer prompts, response lengths, other models/backends or hardware can exceed it.")
+    if any(c.policy.backend == "vllm" for c in configs):
+        print("vLLM estimate: the corrected 1.5B/AMP/chunked path uses the real 800-response, "
+              "50-turn probe (232.5s decoding, 551.6s updating), plus transfer/startup costs. "
+              "Other settings use the earlier component extrapolation. "
+              "Evaluation and whole-suite runtime remain extrapolations.", flush=True)
     print(f"Runs: {runs.resolve()}\nReports: {out.resolve()}", flush=True)
-    if args.tier == "overnight_full":
+    if args.tier in ("overnight_full", "paper_overnight"):
         cfg = configs[0]
+        steps_per_iteration = (math.ceil(cfg.train.games_per_iter * cfg.train.group_size *
+                                       cfg.train.max_steps / cfg.train.mini_batch_size)
+                               if cfg.train.mini_batch_size else cfg.train.mini_batches)
         print(f"Expanded plan per method/seed: {cfg.train.iterations} batches x "
               f"{cfg.train.games_per_iter} games x {cfg.train.group_size} siblings; "
-              f"up to {cfg.train.iterations * cfg.train.mini_batches * cfg.train.ppo_epochs} optimizer steps; "
+              f"up to {cfg.train.iterations * steps_per_iteration * cfg.train.ppo_epochs} optimizer steps; "
               f"{cfg.eval.max_tasks or 'all'} "
               "evaluation tasks. Fixed workload across methods; runtime can vary.", flush=True)
     if args.estimate_only:

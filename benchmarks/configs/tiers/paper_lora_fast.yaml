@@ -6,3 +6,4 @@ policy:
   backend: vllm
   vllm_enforce_eager: false
   vllm_max_num_seqs: 32
+  vllm_max_model_len: 2560  # 2048 prompt + 512 response, instead of unused 8192 context

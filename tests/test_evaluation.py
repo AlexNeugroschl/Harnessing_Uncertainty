@@ -78,8 +78,9 @@ def test_suite_rejects_stale_eval_and_training(tmp_path):
         _finished(cfg)
 
 
-def test_budgeted_training_requires_completion_after_adapter_save(tmp_path):
-    cfg = load("grpo", "overnight")
+@pytest.mark.parametrize("tier", ["overnight", "paper_overnight"])
+def test_budgeted_training_requires_completion_after_adapter_save(tmp_path, tier):
+    cfg = load("grpo", tier)
     cfg.out_dir = str(tmp_path)
     cfg.run_dir.mkdir()
     (cfg.run_dir / "adapter").mkdir()
