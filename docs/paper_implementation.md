@@ -1,9 +1,12 @@
 # Practical EMPG implementation
 
-The default command now runs `paper_overnight`: GRPO versus EMPG, one training seed, LoRA
-rank 16, two games with eight siblings each, 12 iterations, 50-turn episodes, and all 134
-`valid_unseen` evaluation tasks. Outputs use new `runs/paper_overnight` and
-`results/paper_overnight` directories. The suite deadline is 8.5 hours, including evaluations.
+The default command now runs `paper_optimized`: GRPO versus EMPG, one training seed, LoRA
+rank 16, two games with eight siblings each, 20 iterations, 50-turn episodes, and all 134
+`valid_unseen` evaluation tasks. Outputs use `runs/paper_optimized` and
+`results/paper_optimized` directories. The suite deadline is 8.5 hours, including evaluations.
+The historical `paper_overnight` tier remains unchanged at 12 iterations. See
+[update optimizations](update_optimizations.md) for the new execution settings, measurements,
+and how to reuse that completed seed in a compatible replication report.
 
 ## Protocol corrections
 
@@ -84,8 +87,10 @@ For HF-only decoding, use `paper_lora`, or override `policy.backend=hf` in a fre
 directory. The normal `empg` environment supports that fallback. Do not compare arms using
 different backends in one experiment. The timing estimate incorporates measured component
 gains and the full-horizon profile but remains an extrapolation; a deadline can leave an arm unfinished.
-The current default estimate is about 7.5 hours centrally (3.7-11.2 hours under the runner's
-workload variation assumptions), with an 8.5-hour deadline. This is not a measured timing interval.
+The optimized default estimate is about 7.5 hours centrally, or 7.1 hours with the
+existing zero-shot baseline reused, with an 8.5-hour deadline. It uses the completed
+5.1-hour suite and the new shared-rollout update probe; see the optimization notes.
+The broad 0.5-1.5x workload range is not a measured timing interval.
 
 ## Validation
 

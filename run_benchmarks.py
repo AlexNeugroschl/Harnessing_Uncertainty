@@ -23,7 +23,8 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parent
-DEFAULT_TIER = "paper_overnight"
+DEFAULT_TIER = "paper_optimized"
+FAST_TIERS = ("paper_lora_fast", "paper_overnight", "paper_optimized", "paper_replication", "paper_lr_pilot")
 
 # Comment/uncomment one line per method to choose the default experiment.
 # --arms overrides this list. The untrained base model is evaluated separately
@@ -56,7 +57,7 @@ def launch_in_wsl(argv):
             tier = argv[i + 1]
         elif arg.startswith("--tier="):
             tier = arg.split("=", 1)[1]
-    backend = "vllm" if tier in ("paper_lora_fast", "paper_overnight") else "hf"
+    backend = "vllm" if tier in FAST_TIERS else "hf"
     for arg in argv:
         if arg.startswith("policy.backend="):
             backend = arg.split("=", 1)[1]
@@ -75,6 +76,17 @@ def duration(seconds):
     if seconds >= 3600:
         return f"{seconds / 3600:.1f} hours"
     return f"{seconds / 60:.1f} minutes"
+
+
+def optimized_calibration(cfg):
+    p = cfg.policy
+    return (p.model_name == "Qwen/Qwen2.5-1.5B-Instruct" and p.dtype == "bfloat16"
+            and p.backend == "vllm" and not p.vllm_enforce_eager and p.amp and p.lora_r == 16
+            and p.chunked_head and p.head_backend == "analytic" and p.head_chunk_size == 256
+            and p.gradient_checkpointing and p.checkpoint_min_tokens == 0
+            and p.micro_batch_size == p.score_batch_size == 2 and p.micro_batch_tokens == 2560
+            and p.max_new_tokens == 512 and p.max_prompt_tokens == 2048
+            and cfg.train.entropy_coef == .001 and cfg.train.kl_coef == .01)
 
 
 def estimate(cfg, *, train=True, evaluate=True):
@@ -124,9 +136,25 @@ def estimate(cfg, *, train=True, evaluate=True):
         update_rate = 551.638224246 / 800 * cfg.train.ppo_epochs
     if not cfg.policy.chunked_head:
         update_rate = 43.61 / 24 * cfg.train.ppo_epochs
-    batch_seconds = (steps * ((generation_rate + update_rate) * tokens + 2.51 / 80 * env_scale)
-                     + episodes * 12.72 / 16 * env_scale)
-    if cfg.policy.backend == "vllm":
+    observed = optimized_calibration(cfg)
+    if observed:
+        # Completed 5.1h suite: 18,920 response rows, 9,122.25s scoring/update,
+        # 4,291.36s decoding. Apply only the measured shared-rollout head ratios:
+        # 54.28 -> 51.05s scoring; 92.92 -> 86.39s backward/optimizer (192 rows).
+        # This is a workload extrapolation, not a measured optimized full suite.
+        tokens = 1.
+        generation_rate = (4291.36 / 18920) * (16 / max(1, active_batch)) ** .365
+        score_share = 3172.31 / 9122.25
+        score_ratio = 51.049164766 / 54.276215761
+        grad_ratio = (137.437746908 - 51.049164766) / (147.194682376 - 54.276215761)
+        update_rate = (9122.25 / 18920) * (
+            score_share * score_ratio + (1 - score_share) * grad_ratio * cfg.train.ppo_epochs)
+        batch_seconds = (steps * (generation_rate + update_rate + .011 * env_scale)
+                         + episodes * .235 * env_scale + 10.075)
+    else:
+        batch_seconds = (steps * ((generation_rate + update_rate) * tokens + 2.51 / 80 * env_scale)
+                         + episodes * 12.72 / 16 * env_scale)
+    if cfg.policy.backend == "vllm" and not observed:
         batch_seconds += 20.  # weight transfers, sleep/wake, adapter publication
     batches = cfg.train.iterations
     if cfg.train.max_env_steps:
@@ -156,6 +184,10 @@ def estimate(cfg, *, train=True, evaluate=True):
                 evaluation += n * cfg.eval.max_steps * (
                     rate * tokens + 2.51 / 80 * env_scale)
         evaluation += task_count * 12.72 / 16 * env_scale
+        if observed:
+            # Completed suite's non-training time, allowing for process startup,
+            # was about 65% of the earlier evaluation extrapolation.
+            evaluation *= .65
     startup = 75 if cfg.policy.backend == "vllm" else 30
     phases = 1 if train and evaluate and cfg.eval.sampling_seed is not None else int(train) + int(evaluate)
     central = training + evaluation + startup * phases
@@ -182,22 +214,24 @@ def main(argv=None):
     ap.add_argument("--arms", nargs="+", choices=list(arms()),
                     help="override the uncommented ENABLED_METHODS lines at the top of this file")
     ap.add_argument("--seeds", nargs="+", type=int,
-                    help="default: 0 for local overnight/pilot tiers; 0 1 2 for full/reduced/paper_lora[_fast]")
+                    help="default: 0 for overnight/pilot tiers; 0 1 2 for replication/full/reduced/paper_lora[_fast]")
     ap.add_argument("--hours", type=float,
-                    help="training/evaluation deadline; default 8.5 for paper_overnight/overnight_full, 8 for overnight, 0 otherwise")
+                    help="training/evaluation deadline; default 8.5 for paper_optimized/paper_overnight/overnight_full, 8 for overnight, 0 otherwise")
     ap.add_argument("--runs", help="run directory (default runs/<tier>)")
     ap.add_argument("--out", help="report directory (default results/<tier>)")
     ap.add_argument("--baseline", default="grpo", choices=list(arms()))
     ap.add_argument("--skip-base", action="store_true")
+    ap.add_argument("--include-runs", nargs="+",
+                    help="include compatible completed seeds from these roots in the report; training stays in --runs")
     modes = ap.add_mutually_exclusive_group()
     modes.add_argument("--estimate-only", action="store_true", help="print remaining workload; do not train")
     modes.add_argument("--report-only", action="store_true", help="regenerate tables from existing runs")
     ap.add_argument("overrides", nargs="*", help="shared dotted config overrides; precede with -- after --seeds/--arms")
     args = ap.parse_args(argv)
     if args.seeds is None:
-        args.seeds = [0, 1, 2] if args.tier in ("full", "reduced", "paper_lora", "paper_lora_fast") else [0]
+        args.seeds = [0, 1, 2] if args.tier in ("full", "reduced", "paper_lora", "paper_lora_fast", "paper_replication") else [0]
     if args.hours is None:
-        args.hours = {"paper_overnight": 8.5, "overnight_full": 8.5, "overnight": 8.}.get(args.tier, 0.)
+        args.hours = {"paper_optimized": 8.5, "paper_overnight": 8.5, "overnight_full": 8.5, "overnight": 8.}.get(args.tier, 0.)
     if not math.isfinite(args.hours) or args.hours < 0:
         ap.error("--hours must be finite and nonnegative (0 disables the deadline)")
     if args.arms is None:
@@ -219,9 +253,28 @@ def main(argv=None):
     configs = [load(arm, args.tier, overrides, seed) for seed in args.seeds for arm in args.arms]
     base = load(BASE, args.tier, overrides)
     split = configs[0].eval.split
+    report_seeds = list(args.seeds)
+    included_pairs = set()
+    if args.include_runs:
+        from benchmarks.report import run_dirs, validate_combined_runs
+        included = [Path(p) for p in args.include_runs]
+        if any(not p.is_dir() for p in included):
+            ap.error("every --include-runs directory must exist")
+        sources = validate_combined_runs([runs, *included], split, arms=args.arms, planned=configs)
+        if "base" in sources:
+            args.skip_base = True
+            print(f"Reuse zero-shot evaluation: {sources['base']}", flush=True)
+        report_seeds = sorted(set(report_seeds) | {
+            int(d.name.rsplit("_s", 1)[1]) for root in included for d, arm in run_dirs(root)
+            if arm in args.arms and (d / f"eval_{split}.json").exists()})
+        included_pairs = {(arm, int(d.name.rsplit("_s", 1)[1]))
+                          for d, arm in run_dirs(included, arms=args.arms, split=split)
+                          if arm != "base" and (d / f"eval_{split}.json").exists()}
     report_cmd = [sys.executable, "-m", "benchmarks.report", "--runs", str(runs),
                   "--split", split, "--out", str(out), "--baseline", args.baseline,
-                  "--arms", *args.arms, "--seeds", *map(str, args.seeds)]
+                  "--arms", *args.arms, "--seeds", *map(str, report_seeds)]
+    if args.include_runs:
+        report_cmd.extend(["--include-runs", *args.include_runs])
     if args.report_only:
         execute(report_cmd)
         print(f"Reports: {(out / 'comparison.md').resolve()}")
@@ -232,6 +285,8 @@ def main(argv=None):
     if not args.skip_base and not _matching_eval(eval_path(base, base=True), base):
         remaining.append({"arm": "base", "seed": None, **estimate(base, train=False)})
     for cfg in configs:
+        if (cfg.name, cfg.seed) in included_pairs:
+            continue
         if _matching_eval(eval_path(cfg), cfg):
             continue
         finished = _finished(cfg)
@@ -258,12 +313,17 @@ def main(argv=None):
           "Range models early finishes / timing variation; it is not a measured confidence interval. "
           "Longer prompts, response lengths, other models/backends or hardware can exceed it.")
     if any(c.policy.backend == "vllm" for c in configs):
-        print("vLLM estimate: the corrected 1.5B/AMP/chunked path uses the real 800-response, "
-              "50-turn probe (232.5s decoding, 551.6s updating), plus transfer/startup costs. "
-              "Other settings use the earlier component extrapolation. "
-              "Evaluation and whole-suite runtime remain extrapolations.", flush=True)
+        if any(optimized_calibration(c) for c in configs):
+            print("Optimized estimate: completed 5.1-hour suite plus the shared-rollout analytic-head probe "
+                  "(147.2s to 137.4s per 192-response update). Revised forecasts are not measured "
+                  "whole-suite speedups; task/context variation can still reach the deadline.", flush=True)
+        else:
+            print("vLLM estimate: the corrected 1.5B/AMP/chunked path uses the real 800-response, "
+                  "50-turn probe (232.5s decoding, 551.6s updating), plus transfer/startup costs. "
+                  "Other settings use the earlier component extrapolation. "
+                  "Evaluation and whole-suite runtime remain extrapolations.", flush=True)
     print(f"Runs: {runs.resolve()}\nReports: {out.resolve()}", flush=True)
-    if args.tier in ("overnight_full", "paper_overnight"):
+    if args.tier in ("overnight_full", "paper_overnight", "paper_optimized", "paper_replication"):
         cfg = configs[0]
         steps_per_iteration = (math.ceil(cfg.train.games_per_iter * cfg.train.group_size *
                                        cfg.train.max_steps / cfg.train.mini_batch_size)
@@ -281,6 +341,8 @@ def main(argv=None):
     manifest = {"started_utc": datetime.now(timezone.utc).isoformat(), "tier": args.tier,
                 "hours": args.hours,
                 "arms": args.arms, "seeds": args.seeds, "baseline": args.baseline,
+                "include_runs": args.include_runs or [], "report_seeds": report_seeds,
+                "included_seed_runs": sorted(included_pairs),
                 "runs": str(runs.resolve()), "split": split, "remaining_estimates": remaining,
                 "estimate": totals, "configs": [dataclasses.asdict(c) for c in configs],
                 "status": "running"}
@@ -290,6 +352,8 @@ def main(argv=None):
                  "--arms", *args.arms, "--seeds", *map(str, args.seeds)]
     if args.skip_base:
         suite_cmd.append("--skip-base")
+    if args.include_runs:
+        suite_cmd.extend(["--include-runs", *args.include_runs])
     if args.hours:
         suite_cmd.extend(["--max-seconds", str(args.hours * 3600)])
     suite_cmd.extend(["--", *overrides])

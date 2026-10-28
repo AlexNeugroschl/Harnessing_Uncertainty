@@ -15,7 +15,7 @@ from empg.config import Config, config_dict, config_fingerprint, config_matches
 from empg.curiosity import exploration_stats, intrinsic_rewards
 from empg.envs.base import make_benchmark
 from empg.loss import policy_loss
-from empg.policy import LLMPolicy
+from empg.policy import LLMPolicy, token_microbatches
 from empg.rollout import Trajectory, length_stats, response_lengths, run_episodes
 
 
@@ -70,6 +70,7 @@ def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
     step_traj = np.array([i for i, tr in enumerate(trajs) for _ in tr.steps])
     P = [s.prompt_ids for s in steps]
     R = [s.response_ids for s in steps]
+    lengths = [len(p) + len(r) for p, r in zip(P, R)]
 
     # Step entropy H_t (Eq. 7): mean full-vocab token entropy over the response.
     t_score = time.perf_counter()
@@ -113,10 +114,9 @@ def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
             n_tok = sum(len(R[i]) for i in mb)
             # Keep random minibatch membership and token-mean weighting, while
             # reducing padding inside its gradient-accumulation microbatches.
-            mb = np.array(sorted(mb, key=lambda i: len(P[i]) + len(R[i])))
+            mb = np.array(sorted(mb, key=lambda i: lengths[i]))
             opt.zero_grad(set_to_none=True)
-            for s in range(0, len(mb), mb_size):
-                idx = mb[s:s + mb_size]
+            for idx in token_microbatches(mb, lengths, mb_size, policy.cfg.micro_batch_tokens):
                 logp, entropy, mask = policy.forward_logprobs(
                     [P[i] for i in idx], [R[i] for i in idx], with_entropy=tc.entropy_coef > 0)
                 T = logp.shape[1]

@@ -1,0 +1,20 @@
+{
+  "empg": {
+    "delta": 0.029850746268656716,
+    "ci95": [
+      -0.022388059701492536,
+      0.08208955223880597
+    ],
+    "degenerate": false,
+    "seeds": [
+      0
+    ],
+    "n_tasks": 134,
+    "discordant_seed_tasks": 14,
+    "seed_deltas": [
+      0.029850746268656716
+    ],
+    "scope": "task variability only",
+    "note": "Exploratory percentile bootstrap; few seeds give uncertain intervals. Constant observed differences give a degenerate interval, not evidence of equivalence."
+  }
+}

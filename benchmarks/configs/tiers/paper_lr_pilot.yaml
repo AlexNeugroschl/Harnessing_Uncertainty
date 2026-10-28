@@ -1,0 +1,10 @@
+# Development pilot only: preserve valid_unseen for the final comparison.
+# Compare shared train.lr overrides in separate run roots; no automatic LR selection.
+inherit: paper_optimized.yaml
+out_dir: runs/paper_lr_pilot
+train:
+  iterations: 8
+  save_every: 0
+eval:
+  split: valid_seen
+  max_tasks: 48

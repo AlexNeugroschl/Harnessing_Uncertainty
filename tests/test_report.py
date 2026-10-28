@@ -1,7 +1,91 @@
 import json
+import dataclasses
+import pytest
 
 from benchmarks.report import (comparisons, curiosity_comparisons, explore_table, load,
                                load_lengths, read_jsonl, table, write_run_comparison)
+from benchmarks.report import validate_combined_runs
+from benchmarks.common import load as load_config
+
+
+def combined_seed(root, seed):
+    directory = root / f"grpo_s{seed}"
+    directory.mkdir(parents=True)
+    cfg = load_config("grpo", "paper_overnight", seed=seed)
+    ev = {"seed": seed, "all": .5, "protocol": {"temperature": .4},
+          "per_task": [{"task": "task", "won": True}]}
+    (directory / "config.json").write_text(json.dumps(dataclasses.asdict(cfg)))
+    (directory / "eval_valid_unseen.json").write_text(json.dumps(ev))
+    (directory / "metrics.jsonl").write_text('{"iteration": 12}\n')
+    return directory, cfg
+
+
+def test_existing_seeds_combine_without_retraining_and_keep_sources(tmp_path):
+    old, new = tmp_path / "old", tmp_path / "new"
+    directory, cfg = combined_seed(old, 0)
+    directory, cfg = combined_seed(new, 1)
+    cfg.policy.micro_batch_size, cfg.policy.score_batch_size = 4, 8
+    cfg.policy.head_backend = "analytic"
+    (directory / "config.json").write_text(json.dumps(dataclasses.asdict(cfg)))
+    roots = [new, old]
+    sources = validate_combined_runs(roots, "valid_unseen", planned=[cfg])
+    assert set(sources) == {"grpo_s0", "grpo_s1"}
+    evals, curves = load(roots, "valid_unseen", [0, 1])
+    assert [e["seed"] for e in evals["grpo"]] == [1, 0]
+    assert len(curves["grpo"]) == 2
+    out = tmp_path / "out"
+    out.mkdir()
+    write_run_comparison(roots, "valid_unseen", out, ["grpo"], [0, 1, 2])
+    assert "| grpo | 2 | not started |" in (out / "runs.md").read_text()
+
+
+@pytest.mark.parametrize("change", ["budget", "lr", "panel", "protocol", "duplicate", "seed", "fingerprint"])
+def test_combining_rejects_mismatched_experiments_and_duplicate_seeds(tmp_path, change):
+    old, new = tmp_path / "old", tmp_path / "new"
+    combined_seed(old, 0)
+    directory, cfg = combined_seed(new, 0 if change == "duplicate" else 1)
+    if change in ("budget", "lr"):
+        if change == "budget":
+            cfg.train.iterations += 1
+        else:
+            cfg.train.lr *= 10
+        (directory / "config.json").write_text(json.dumps(dataclasses.asdict(cfg)))
+    elif change in ("panel", "protocol", "seed", "fingerprint"):
+        path = directory / "eval_valid_unseen.json"
+        ev = json.loads(path.read_text())
+        if change == "panel":
+            ev["per_task"][0]["task"] = "different task"
+        elif change == "protocol":
+            ev["protocol"]["temperature"] = .8
+        elif change == "seed":
+            ev["seed"] = 0
+        else:
+            ev["config_fingerprint"] = "wrong"
+        path.write_text(json.dumps(ev))
+    with pytest.raises(ValueError, match="Different|Duplicate|seed|fingerprint"):
+        validate_combined_runs([new, old], "valid_unseen")
+
+
+def test_reuse_only_zero_shot_for_a_deeper_budget_requires_matching_eval_protocol(tmp_path, monkeypatch):
+    from benchmarks.evaluate import evaluation_protocol
+    from benchmarks import evaluate as evaluation
+    from types import SimpleNamespace
+    monkeypatch.setattr(evaluation, "make_benchmark", lambda *a, **kw: SimpleNamespace(tasks=lambda split: ["task"]))
+    cfg = load_config("grpo", "paper_optimized")
+    directory = tmp_path / "old/base"
+    directory.mkdir(parents=True)
+    (directory / "eval_valid_unseen.json").write_text(json.dumps({
+        "protocol": evaluation_protocol(cfg), "all": .06,
+        "per_task": [{"task": "task", "won": False}]}))
+    sources = validate_combined_runs([tmp_path / "new", directory], "valid_unseen", planned=[cfg])
+    assert set(sources) == {"base"}
+    evals, _ = load([tmp_path / "new", directory], "valid_unseen")
+    assert len(evals["base"]) == 1
+    cfg.train.iterations = 100
+    validate_combined_runs([directory], "valid_unseen", planned=[cfg])
+    cfg.policy.model_name = "different-model"
+    with pytest.raises(ValueError, match="Different evaluation protocol"):
+        validate_combined_runs([directory], "valid_unseen", planned=[cfg])
 
 
 def test_ablation_table_has_the_same_number_of_columns_in_every_row():

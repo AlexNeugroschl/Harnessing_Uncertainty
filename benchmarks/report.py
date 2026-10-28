@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import dataclasses
+import hashlib
 import json
 from collections import defaultdict
 from pathlib import Path
@@ -47,9 +49,30 @@ EXPLORE_COLS = [("success", "train success"), ("revisit_rate", "revisit rate"), 
                 ("success_len", "steps to success"), ("intrinsic_share", "intrinsic share")]
 
 
-def run_dirs(runs: Path, seeds=None):
+def run_roots(runs):
+    return [runs] if isinstance(runs, Path) else list(runs)
+
+
+def run_dirs(runs: Path, seeds=None, arms=None, split=None):
     """Use the same seed selection for every artifact, including token lengths."""
+    if not isinstance(runs, Path):
+        found = {}
+        for root in runs:
+            for directory, arm in run_dirs(root, seeds, arms, split):
+                if directory.name in found:
+                    if arm == "base":
+                        previous, _ = found[directory.name]
+                        if split and not (previous / f"eval_{split}.json").exists():
+                            found[directory.name] = (directory, arm)
+                        continue  # one zero-shot result, never counted as extra seeds
+                    raise ValueError(f"Duplicate run {directory.name} in report inputs")
+                found[directory.name] = (directory, arm)
+        yield from found.values()
+        return
     if not runs.exists():
+        return
+    if runs.name == "base":
+        yield runs, "base"
         return
     for d in sorted(runs.iterdir()):
         if not d.is_dir():
@@ -58,9 +81,86 @@ def run_dirs(runs: Path, seeds=None):
             yield d, "base"
             continue
         arm, separator, seed = d.name.rpartition("_s")
+        if arms and (arm if separator else d.name) not in arms:
+            continue
         if seeds is not None and (not separator or seed not in {str(s) for s in seeds}):
             continue
         yield d, arm if separator else d.name
+
+
+def training_signature(data):
+    from empg.config import _optional_defaults
+    signature = _optional_defaults(data)
+    # Do not mutate the source's nested configuration dictionaries.
+    signature = json.loads(json.dumps(signature))
+    for key in ("name", "seed", "out_dir"):
+        signature.pop(key, None)
+    for key in ("score_batch_size", "micro_batch_size", "micro_batch_tokens", "cuda_memory_fraction",
+                "head_chunk_size", "head_backend",
+                "head_checkpointing", "chunked_head", "gradient_checkpointing", "checkpoint_min_tokens"):
+        signature.get("policy", {}).pop(key, None)
+    signature.get("env", {}).pop("workers", None)
+    signature.get("train", {}).pop("save_every", None)
+    return signature
+
+
+def validate_combined_runs(runs, split, seeds=None, arms=None, planned=None):
+    """Combine existing seeds without retraining or mixing learning protocols.
+
+    Only execution settings may differ. Objective, optimizer minibatches,
+    training budget, generation distribution and evaluation panel must match.
+    Source configurations and artifacts stay in their original directories.
+    """
+    signatures = {cfg.name: training_signature(dataclasses.asdict(cfg)) for cfg in planned or []}
+    protocols, panels = {}, {}
+    sources = {}
+    for directory, arm in run_dirs(runs, seeds, arms, split):
+        if arms and arm not in arms and arm != "base":
+            continue
+        evaluation = directory / f"eval_{split}.json"
+        if not evaluation.exists():
+            continue
+        ev = json.loads(evaluation.read_text())
+        sources[directory.name] = str(directory.resolve())
+        protocol = ev.get("protocol")
+        panel = sorted(t["task"] for t in ev.get("per_task", []))
+        if not protocol or not panel:
+            raise ValueError(f"{evaluation} lacks protocol/task metadata needed to combine runs")
+        if arm in protocols and (protocols[arm] != protocol or panels[arm] != panel):
+            raise ValueError(f"Different evaluation protocols or task panels for {arm}")
+        protocols[arm], panels[arm] = protocol, panel
+        if arm == "base":
+            if planned:
+                from benchmarks.evaluate import evaluation_protocol, make_benchmark, select_tasks
+                if protocol != evaluation_protocol(planned[0]):
+                    raise ValueError("Different evaluation protocol for the included zero-shot baseline")
+                baseline_cfg = planned[0]
+                bench = make_benchmark(baseline_cfg.benchmark, **baseline_cfg.env)
+                try:
+                    expected_panel = sorted(select_tasks(bench.tasks(split), bench, baseline_cfg.eval))
+                finally:
+                    if hasattr(bench, "close"):
+                        bench.close()
+                if panel != expected_panel:
+                    raise ValueError("Different evaluation task panel for the included zero-shot baseline")
+            continue
+        expected_seed = int(directory.name.rsplit("_s", 1)[1])
+        if ev.get("seed") != expected_seed:
+            raise ValueError(f"Evaluation seed does not match run directory {directory}")
+        path = directory / "config.json"
+        if not path.exists():
+            raise ValueError(f"{directory} needs config.json to combine training seeds")
+        saved_config = json.loads(path.read_text())
+        if ev.get("config_fingerprint"):
+            from empg.config import _optional_defaults
+            fingerprint = hashlib.sha256(json.dumps(_optional_defaults(saved_config), sort_keys=True).encode()).hexdigest()
+            if fingerprint != ev["config_fingerprint"]:
+                raise ValueError(f"Evaluation/config fingerprint mismatch in {directory}")
+        signature = training_signature(saved_config)
+        if arm in signatures and signatures[arm] != signature:
+            raise ValueError(f"Different training protocols for {arm}; report experiments separately")
+        signatures[arm] = signature
+    return sources
 
 
 def read_jsonl(path: Path):
@@ -82,9 +182,9 @@ def read_jsonl(path: Path):
     return records
 
 
-def load(runs: Path, split: str, seeds=None):
+def load(runs: Path, split: str, seeds=None, arms=None):
     evals, curves = defaultdict(list), defaultdict(list)
-    for d, arm in run_dirs(runs, seeds):
+    for d, arm in run_dirs(runs, seeds, arms, split):
         e = d / f"eval_{split}.json"
         if e.exists():
             evals[arm].append(json.loads(e.read_text()))
@@ -229,7 +329,7 @@ def explore_table(curves, last: int = 5) -> str:
     return out
 
 
-def load_lengths(runs: Path, split: str, seeds=None) -> dict:
+def load_lengths(runs: Path, split: str, seeds=None, arms=None) -> dict:
     """{arm: {phase: raw lengths}} from the resp_lengths_* files, pooled over seeds."""
     pooled = defaultdict(lambda: defaultdict(
         lambda: {"len": [], "truncated": [], "valid": [], "cap": set()}))
@@ -240,7 +340,7 @@ def load_lengths(runs: Path, split: str, seeds=None) -> dict:
             d[k] += rec[k]
         d["cap"].add(rec["cap"])
 
-    for d, arm in run_dirs(runs, seeds):
+    for d, arm in run_dirs(runs, seeds, arms, split):
         t = d / "resp_lengths_train.jsonl"
         if t.exists():
             recs = read_jsonl(t)
@@ -274,7 +374,7 @@ def lengths_table(pooled: dict) -> str:
 def write_run_comparison(runs: Path, split: str, out: Path, arms=None, seeds=None):
     """One row per seed, with observed training cost (startup/evaluation excluded)."""
     rows = []
-    for d, arm in run_dirs(runs, seeds):
+    for d, arm in run_dirs(runs, seeds, arms, split):
         if arms and arm not in arms and arm != "base":
             continue
         evaluation = d / f"eval_{split}.json"
@@ -305,7 +405,7 @@ def write_run_comparison(runs: Path, split: str, out: Path, arms=None, seeds=Non
         for seed in seeds:
             for arm in arms:
                 if (arm, str(seed)) not in present:
-                    exists = (runs / f"{arm}_s{seed}").exists()
+                    exists = any((root / f"{arm}_s{seed}").exists() for root in run_roots(runs))
                     row = dict.fromkeys(fields, "")
                     row.update(method=arm, seed=seed, status="not evaluated" if exists else "not started",
                                training_stop="incomplete" if exists else "not started")
@@ -348,15 +448,21 @@ def curiosity_comparisons(evals):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", default="runs/reduced")
+    ap.add_argument("--include-runs", nargs="+", help="additional roots containing compatible, distinct training seeds")
     ap.add_argument("--split", default="valid_unseen")
     ap.add_argument("--out", default="results")
     ap.add_argument("--arms", nargs="+", help="only these methods (plus base)")
     ap.add_argument("--seeds", nargs="+", type=int, help="only these training seeds (plus base)")
     ap.add_argument("--baseline", default="grpo", help="baseline for paired task/seed comparisons")
     args = ap.parse_args()
+    if any(not Path(p).is_dir() for p in args.include_runs or []):
+        ap.error("every --include-runs directory must exist")
+    roots = [Path(args.runs), *(Path(p) for p in args.include_runs or [])]
+    runs = roots if args.include_runs else roots[0]
+    sources = validate_combined_runs(roots, args.split, args.seeds, args.arms) if args.include_runs else None
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    evals, curves = load(Path(args.runs), args.split, args.seeds)
+    evals, curves = load(runs, args.split, args.seeds, args.arms)
     if args.arms:
         evals = {a: v for a, v in evals.items() if a in args.arms or a == "base"}
         curves = {a: v for a, v in curves.items() if a in args.arms}
@@ -369,7 +475,7 @@ def main():
     (out / "ablation.md").write_text(t2)
     t3 = "### Exploration during training (mean of last 5 iterations)\n\n" + explore_table(curves)
     (out / "exploration.md").write_text(t3)
-    lengths = load_lengths(Path(args.runs), args.split, args.seeds)
+    lengths = load_lengths(runs, args.split, args.seeds, args.arms)
     if args.arms:
         lengths = {a: v for a, v in lengths.items() if a in args.arms or a == "base"}
     t4 = ("### Response lengths (tokens) vs the `max_new_tokens` cap\n\n"
@@ -378,6 +484,8 @@ def main():
           + lengths_table(lengths))
     (out / "response_lengths.md").write_text(t4)
     (out / "summary.json").write_text(json.dumps(evals, indent=2))
+    if sources is not None:
+        (out / "summary_sources.json").write_text(json.dumps(sources, indent=2))
     paired_md, paired = comparisons(evals, args.baseline)
     (out / "paired_comparisons.md").write_text(paired_md)
     (out / "paired_comparisons.json").write_text(json.dumps(paired, indent=2))
@@ -385,7 +493,7 @@ def main():
     (out / "curiosity_comparisons.md").write_text(curiosity_md, encoding="utf-8")
     (out / "curiosity_comparisons.json").write_text(json.dumps(curiosity_pairs, indent=2))
     all_rows = with_extra_arms([("base", "Zero-shot base"), *ARMS], evals)
-    individual = write_run_comparison(Path(args.runs), args.split, out, args.arms, args.seeds)
+    individual = write_run_comparison(runs, args.split, out, args.arms, args.seeds)
     combined = (f"# ALFWorld `{args.split}` benchmark comparison\n\n"
                 "Success rates are percentages; ± is sample standard deviation across training seeds. "
                 "Paired intervals below are unadjusted for multiple comparisons. "

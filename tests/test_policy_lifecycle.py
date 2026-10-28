@@ -20,6 +20,20 @@ def bare_policy():
     return policy
 
 
+@pytest.mark.parametrize("device,index", [("cuda", 0), ("cuda:1", 1), ("cpu", None)])
+def test_memory_guard_resolves_cuda_device_index_before_loading(monkeypatch, device, index):
+    from empg import policy as policy_module
+    calls = []
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: 0)
+    monkeypatch.setattr(torch.cuda, "set_per_process_memory_fraction", lambda f, d: calls.append((f, d)))
+    def stop_before_loading(*a, **kw):
+        raise RuntimeError("test stops before loading")
+    monkeypatch.setattr(policy_module.AutoTokenizer, "from_pretrained", stop_before_loading)
+    with pytest.raises(RuntimeError, match="test stops"):
+        LLMPolicy(PolicyConfig(cuda_memory_fraction=.75), device=device)
+    assert calls == ([] if index is None else [(.75, index)])
+
+
 def test_prompt_limit_rejects_without_truncation():
     policy = bare_policy()
     class Tokenizer:

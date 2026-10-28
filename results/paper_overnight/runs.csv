@@ -1,0 +1,4 @@
+method,seed,status,success_pct,eval_tasks,iterations,env_steps,response_tokens,training_seconds,training_stop
+base,,evaluated,5.970149253731343,134,,,,,not trained
+empg,0,evaluated,8.955223880597014,134,12,9445,869237,6932.150992393494,iterations
+grpo,0,evaluated,5.970149253731343,134,12,9475,868317,7021.507605314255,iterations

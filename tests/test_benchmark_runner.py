@@ -168,7 +168,7 @@ def test_strict_eight_hour_override_preserves_the_expanded_workload(monkeypatch,
 
 def test_deadline_generates_partial_tables_and_returns_124(monkeypatch, tmp_path):
     prepare(monkeypatch, tmp_path)
-    (tmp_path / "runs/paper_overnight").mkdir(parents=True)
+    (tmp_path / "runs/paper_optimized").mkdir(parents=True)
     commands = []
 
     def execute(cmd):
@@ -179,7 +179,7 @@ def test_deadline_generates_partial_tables_and_returns_124(monkeypatch, tmp_path
     monkeypatch.setattr(runner, "execute", execute)
     assert runner.main([]) == 124
     assert "benchmarks.report" in commands[-1]
-    manifest = json.loads((tmp_path / "results/paper_overnight/benchmark_run.json").read_text())
+    manifest = json.loads((tmp_path / "results/paper_optimized/benchmark_run.json").read_text())
     assert manifest["status"] == "deadline_reached"
     assert manifest["report_status"] == "complete"
 
@@ -189,12 +189,15 @@ def test_default_uses_corrected_fast_lora_comparison(monkeypatch, tmp_path):
     commands = []
     monkeypatch.setattr(runner, "execute", commands.append)
     assert runner.main([]) == 0
-    manifest = json.loads((tmp_path / "results/paper_overnight/benchmark_run.json").read_text())
+    manifest = json.loads((tmp_path / "results/paper_optimized/benchmark_run.json").read_text())
     assert manifest["arms"] == ["grpo", "empg"] and manifest["seeds"] == [0]
     assert manifest["hours"] == 8.5
     for cfg in manifest["configs"]:
         assert cfg["train"]["reward_mode"] == "step" and cfg["train"]["entropy_coef"] == .001
-        assert cfg["train"]["iterations"] == 12 and cfg["train"]["group_size"] == 8
+        assert cfg["train"]["iterations"] == 20 and cfg["train"]["group_size"] == 8
+        assert cfg["policy"]["score_batch_size"] == 2
+        assert cfg["policy"]["micro_batch_size"] == 2 and cfg["policy"]["head_backend"] == "analytic"
+        assert cfg["policy"]["micro_batch_tokens"] == 2560
         assert cfg["policy"]["backend"] == "vllm" and cfg["policy"]["amp"]
         assert cfg["eval"]["max_tasks"] == 0 and cfg["eval"]["sampling_seed"] == 0
     assert not (tmp_path / "results/overnight_full").exists()
@@ -251,3 +254,74 @@ def test_corrected_runtime_uses_full_horizon_probe_without_double_charging_token
     assert estimate["training_seconds"] == pytest.approx(expected)
     cfg.policy.max_new_tokens = 768
     assert runner.estimate(cfg, evaluate=False)["training_seconds"] > estimate["training_seconds"]
+
+
+def test_replication_reuses_existing_seed_in_report_without_retraining_it(monkeypatch, tmp_path):
+    import dataclasses
+    prepare(monkeypatch, tmp_path)
+    cfg = load("grpo", "paper_overnight")
+    directory = tmp_path / "runs/paper_overnight/grpo_s0"
+    directory.mkdir(parents=True)
+    (directory / "config.json").write_text(json.dumps(dataclasses.asdict(cfg)))
+    (directory / "eval_valid_unseen.json").write_text(json.dumps({
+        "seed": 0, "all": .06, "protocol": {"temperature": .4},
+        "per_task": [{"task": "task", "won": False}]}))
+    commands = []
+    monkeypatch.setattr(runner, "execute", commands.append)
+    runner.main(["--tier", "paper_replication", "--arms", "grpo", "--seeds", "1", "2",
+                 "--skip-base", "--include-runs", "runs/paper_overnight"])
+    suite, report = commands
+    assert suite[suite.index("--seeds") + 1:suite.index("--skip-base")] == ["1", "2"]
+    assert report[report.index("--seeds") + 1:report.index("--include-runs")] == ["0", "1", "2"]
+    assert report[-2:] == ["--include-runs", "runs/paper_overnight"]
+
+
+def test_incompatible_old_budget_is_rejected_before_starting_new_training(monkeypatch, tmp_path):
+    import dataclasses
+    prepare(monkeypatch, tmp_path)
+    cfg = load("grpo", "paper_overnight")
+    directory = tmp_path / "runs/paper_overnight/grpo_s0"
+    directory.mkdir(parents=True)
+    (directory / "config.json").write_text(json.dumps(dataclasses.asdict(cfg)))
+    (directory / "eval_valid_unseen.json").write_text(json.dumps({
+        "seed": 0, "all": .06, "protocol": {"temperature": .4},
+        "per_task": [{"task": "task", "won": False}]}))
+    commands = []
+    monkeypatch.setattr(runner, "execute", commands.append)
+    with pytest.raises(ValueError, match="Different training protocols"):
+        runner.main(["--arms", "grpo", "--seeds", "1", "--include-runs", "runs/paper_overnight"])
+    assert commands == []
+
+
+def test_suite_does_not_retrain_an_included_seed_even_when_requested(monkeypatch, tmp_path):
+    import dataclasses
+    from types import SimpleNamespace
+    from benchmarks import suite
+    old = tmp_path / "old"
+    directory = old / "grpo_s0"
+    directory.mkdir(parents=True)
+    cfg = load("grpo", "paper_overnight")
+    (directory / "config.json").write_text(json.dumps(dataclasses.asdict(cfg)))
+    (directory / "eval_valid_unseen.json").write_text(json.dumps({
+        "seed": 0, "all": .06, "protocol": {"temperature": .4},
+        "per_task": [{"task": "task", "won": False}]}))
+    args = SimpleNamespace(include_runs=[str(old)], skip_base=True, seeds=[0, 1],
+                           tier="paper_replication", overrides=[f"out_dir={tmp_path / 'new'}"])
+    calls = []
+    monkeypatch.setattr(suite, "run", lambda *a, **kw: calls.append(a))
+    monkeypatch.setattr(suite, "_finished", lambda cfg: False)
+    monkeypatch.setattr(suite, "_matching_eval", lambda *a: False)
+    suite.run_suite(args, ["grpo"])
+    assert len(calls) == 1 and calls[0][3] == 1
+
+
+def test_optimized_estimate_uses_observed_costs_and_scores_only_once_for_extra_epochs():
+    cfg = load("empg", "paper_optimized", ["train.iterations=1"])
+    assert runner.optimized_calibration(cfg)
+    one = runner.estimate(cfg, evaluate=False)["training_seconds"]
+    assert 500 < one < 650
+    cfg.train.ppo_epochs = 2
+    two = runner.estimate(cfg, evaluate=False)["training_seconds"]
+    assert one < two < 2 * one
+    cfg.policy.checkpoint_min_tokens = 900
+    assert not runner.optimized_calibration(cfg)

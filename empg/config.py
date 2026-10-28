@@ -80,7 +80,10 @@ def _optional_defaults(data: dict) -> dict:
     for section, defaults in {
         "train": {"entropy_coef": 0.0, "reward_mode": "trajectory", "mini_batch_size": 0,
                   "shuffle": True, "dual_clip": 0.0},
-        "policy": {"amp": False, "vllm_max_num_seqs": 256, "max_prompt_tokens": 0},
+        "policy": {"amp": False, "vllm_max_num_seqs": 256, "max_prompt_tokens": 0,
+                   "checkpoint_min_tokens": 0,
+                   "score_batch_size": 0, "micro_batch_tokens": 0, "cuda_memory_fraction": 0.0,
+                   "head_backend": "checkpoint", "head_checkpointing": True},
         "eval": {"temperature": None, "sampling_seed": None},
         "advantage": {"entropy_eps": 1e-6, "scale_eps": 0.0},
     }.items():

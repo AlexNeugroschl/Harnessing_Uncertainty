@@ -32,7 +32,7 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from empg.scoring import chunked_scores
+from empg.scoring import chunked_scores, analytic_scores
 
 
 @dataclass
@@ -44,6 +44,7 @@ class PolicyConfig:
     lora_dropout: float = 0.0
     lora_targets: list[str] = field(default_factory=lambda: ["all-linear"])
     gradient_checkpointing: bool = True
+    checkpoint_min_tokens: int = 0  # 0 always checkpoints; otherwise only above this padded-token count
     amp: bool = False           # CUDA bf16 autocast; retains FP32 LoRA master parameters
     max_new_tokens: int = 256
     max_prompt_tokens: int = 0  # 0 preserves legacy; paper framework errors above 2048
@@ -51,7 +52,12 @@ class PolicyConfig:
     top_p: float = 1.0
     gen_batch_size: int = 32     # prompts per generate() call
     micro_batch_size: int = 4    # sequences per forward pass when scoring / training
+    score_batch_size: int = 0    # no-grad scoring rows; 0 reuses micro_batch_size
+    micro_batch_tokens: int = 0  # ceiling on padded prompt+response tokens; 0 disables
+    cuda_memory_fraction: float = 0.0  # HF allocator ceiling; 0 leaves the process setting unchanged
     head_chunk_size: int = 128   # response tokens per exact vocabulary projection
+    head_backend: str = "checkpoint"  # checkpoint (reference) | analytic (exact custom backward)
+    head_checkpointing: bool = True
     chunked_head: bool = True   # false: dense reference path for equivalence/profiling
     backend: str = "hf"          # generation engine: hf | vllm (scoring/training are always HF)
     merge_lora: bool = True      # hf: merge LoRA into the weights while generating
@@ -69,12 +75,24 @@ class LLMPolicy:
             raise ValueError(f"unknown policy.backend {cfg.backend!r}")
         if min(cfg.gen_batch_size, cfg.micro_batch_size, cfg.max_new_tokens) < 1 or cfg.max_prompt_tokens < 0:
             raise ValueError("policy batch sizes/response limit must be positive; prompt limit nonnegative")
+        if cfg.score_batch_size < 0 or cfg.micro_batch_tokens < 0 or cfg.head_chunk_size < 1:
+            raise ValueError("score_batch_size/micro_batch_tokens must be nonnegative and head_chunk_size positive")
+        if cfg.head_backend not in ("checkpoint", "analytic"):
+            raise ValueError("head_backend must be checkpoint or analytic")
+        if cfg.checkpoint_min_tokens < 0 or (cfg.checkpoint_min_tokens and not cfg.gradient_checkpointing):
+            raise ValueError("checkpoint_min_tokens requires gradient_checkpointing and must be nonnegative")
+        if not 0 <= cfg.cuda_memory_fraction <= 1:
+            raise ValueError("cuda_memory_fraction must be between 0 and 1")
         if cfg.backend == "vllm" and importlib.util.find_spec("vllm") is None:
             raise RuntimeError("vLLM is not installed in this interpreter. Use ~/venvs/empg-vllm "
                                "or override policy.backend=hf; see README.")
         self.cfg = cfg
         self.seed = seed
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        if cfg.cuda_memory_fraction and torch.device(self.device).type == "cuda":
+            index = torch.device(self.device).index
+            torch.cuda.set_per_process_memory_fraction(float(cfg.cuda_memory_fraction),
+                                                       torch.cuda.current_device() if index is None else index)
         self.tokenizer = AutoTokenizer.from_pretrained(cfg.model_name)
         self.tokenizer.padding_side = "left"
         if self.tokenizer.pad_token is None:
@@ -355,6 +373,17 @@ class LLMPolicy:
         Returns padded tensors [B, R] plus a response mask. Gradients flow unless
         the caller wraps this in no_grad.
         """
+        if torch.is_grad_enabled() and self.model.training and self.cfg.checkpoint_min_tokens:
+            tokens = len(prompt_ids) * max(len(p) + len(r) for p, r in zip(prompt_ids, response_ids))
+            enabled_checkpoint = tokens >= self.cfg.checkpoint_min_tokens
+            # HF initialized the checkpoint functions/input hooks at model load.
+            # Toggle only the flags; re-registering hooks on every microbatch
+            # would accumulate them. There is no outstanding previous backward.
+            if not hasattr(self, "_checkpoint_modules"):
+                self._checkpoint_modules = [m for m in self.model.modules()
+                                            if isinstance(getattr(m, "gradient_checkpointing", None), bool)]
+            for module in self._checkpoint_modules:
+                module.gradient_checkpointing = enabled_checkpoint
         enabled = self.cfg.amp and torch.device(self.device).type == "cuda"
         if enabled and self.cfg.dtype != "bfloat16":
             raise ValueError("policy.amp currently requires policy.dtype=bfloat16")
@@ -383,8 +412,11 @@ class LLMPolicy:
             # response positions, excluding prompts and response padding.
             hidden = causal.base_model(**batch, position_ids=pos, use_cache=False).last_hidden_state
             selected = hidden[:, n - R - 1:n - 1][mask]
-            lp, entropy = chunked_scores(selected, causal.get_output_embeddings(), targets[mask],
-                                         self.cfg.head_chunk_size, with_entropy)
+            scorer = analytic_scores if self.cfg.head_backend == "analytic" else chunked_scores
+            kwargs = {} if self.cfg.head_backend == "analytic" else {
+                "checkpoint_head": self.cfg.head_checkpointing}
+            lp, entropy = scorer(selected, causal.get_output_embeddings(), targets[mask],
+                                 self.cfg.head_chunk_size, with_entropy, **kwargs)
             logp = lp.new_zeros(mask.shape).masked_scatter(mask, lp)
             ent = (entropy.new_zeros(mask.shape).masked_scatter(mask, entropy)
                    if with_entropy else None)
@@ -401,19 +433,43 @@ class LLMPolicy:
         """No-grad chunked scoring. Returns lists of 1-D CPU tensors (one per sample)."""
         self.model.eval()
         logps, ents = [None] * len(prompt_ids), [None] * len(prompt_ids) if with_entropy else []
-        mb = self.cfg.micro_batch_size
-        order = sorted(range(len(prompt_ids)), key=lambda i: len(prompt_ids[i]) + len(response_ids[i]))
+        mb = self.cfg.score_batch_size or self.cfg.micro_batch_size
+        lengths = [len(p) + len(r) for p, r in zip(prompt_ids, response_ids)]
+        order = sorted(range(len(prompt_ids)), key=lambda i: lengths[i])
         ctx = self.model.disable_adapter() if (reference and self.use_lora) else _null()
         with ctx:
-            for s in range(0, len(prompt_ids), mb):
-                idx = order[s:s + mb]
+            for idx in token_microbatches(order, lengths, mb, self.cfg.micro_batch_tokens):
                 lp, ent, mask = self.forward_logprobs(
                     [prompt_ids[i] for i in idx], [response_ids[i] for i in idx], with_entropy)
+                # One transfer per microbatch instead of synchronizing CUDA for
+                # each response and each entropy vector separately.
+                lp, mask = lp.cpu(), mask.cpu()
+                if with_entropy:
+                    ent = ent.cpu()
                 for i in range(lp.shape[0]):
-                    logps[idx[i]] = lp[i][mask[i]].cpu()
+                    logps[idx[i]] = lp[i][mask[i]]
                     if with_entropy:
-                        ents[idx[i]] = ent[i][mask[i]].cpu()
+                        ents[idx[i]] = ent[i][mask[i]]
         return logps, ents
+
+
+def token_microbatches(order, lengths, max_sequences, max_tokens=0):
+    """Preserve row order while bounding padded activation work for long contexts."""
+    if max_sequences < 1 or max_tokens < 0:
+        raise ValueError("positive max_sequences and nonnegative max_tokens required")
+    batch, longest = [], 0
+    for index in order:
+        length = lengths[index]
+        if max_tokens and length > max_tokens:
+            raise ValueError(f"sequence length {length} exceeds micro_batch_tokens={max_tokens}")
+        if batch and (len(batch) >= max_sequences or
+                      (max_tokens and max(longest, length) * (len(batch) + 1) > max_tokens)):
+            yield batch
+            batch, longest = [], 0
+        batch.append(index)
+        longest = max(longest, length)
+    if batch:
+        yield batch
 
 
 def _vllm_env():

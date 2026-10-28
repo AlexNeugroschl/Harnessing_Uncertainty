@@ -86,23 +86,26 @@ Model weights are downloaded on first use and cached locally; an HF token is opt
 
 ```bash
 python run_benchmarks.py --estimate-only  # preview without loading a model
-python run_benchmarks.py                  # corrected GRPO vs EMPG, seed 0, plus base
+python run_benchmarks.py                  # optimized GRPO vs EMPG, seed 0, plus base
 python run_benchmarks.py --hours 8        # strict eight-hour training/evaluation ceiling
 python run_benchmarks.py --report-only
 ```
 
-The default **`paper_overnight`** keeps LoRA rank 16 and uses the corrected EMPG protocol
+The default **`paper_optimized`** keeps LoRA rank 16 and uses the corrected EMPG protocol
 with compiled vLLM decoding, bf16 autocast, checkpointing, and exact chunked vocabulary scores.
-New artifacts go to **`runs/paper_overnight/`** and **`results/paper_overnight/`**.
+New artifacts go to **`runs/paper_optimized/`** and **`results/paper_optimized/`**.
+The completed 12-iteration `paper_overnight` protocol remains available unchanged.
+To reuse its zero-shot baseline for the deeper run, use
+`python run_benchmarks.py --skip-base --include-runs runs/paper_overnight/base`.
 
 | Setting | Default local overnight | Longer corrected local comparison |
 |---|---|---|
-| Tier | `paper_overnight` | `paper_lora_fast` |
+| Tier | `paper_optimized` | `paper_lora_fast` |
 | Methods | GRPO and EMPG | GRPO and EMPG |
 | Seeds | 0 | 0, 1, 2 |
 | Batch | 2 games, 8 siblings per game | Same |
-| Training iterations | 12 | 150 |
-| Episodes per method/seed | 192 | 2,400 |
+| Training iterations | 20 | 150 |
+| Episodes per method/seed | 320 | 2,400 |
 | Train / evaluation horizon | 50 / 50 turns | Same |
 | Response / prompt limits | 512 / 2,048 tokens | Same |
 | Learning rate / weight decay | 1e-6 / 0.01 | Same |
@@ -114,6 +117,23 @@ Both methods receive the same task schedule and fixed iteration budget. The defa
 hardware-limited comparison: the paper used 16 games per batch and full-parameter updates.
 One seed cannot establish a reliable winner. See the [fidelity review](docs/paper_fidelity_review.md)
 for the source mapping, remaining differences, performance measurements and validation.
+
+The [update optimization notes](docs/update_optimizations.md) describe separate scoring batches,
+the exact analytic output-head backward, GPU measurements and the replication/LR pilot presets.
+For more independent seeds without retraining the completed seed 0:
+
+```bash
+python run_benchmarks.py --tier paper_replication --seeds 1 2 --skip-base \
+  --include-runs runs/paper_overnight --estimate-only
+python run_benchmarks.py --tier paper_replication --seeds 1 2 --skip-base \
+  --include-runs runs/paper_overnight
+```
+
+This trains seeds 1 and 2, then reports seeds 0, 1 and 2 together using their original artifacts.
+The replication tier preserves the original 12-iteration budget. Combining different learning
+rates, iteration budgets, sampling settings or evaluation panels is rejected. Duplicate trained
+seeds are rejected rather than counted twice; the zero-shot result is counted once.
+The replication tier has no deadline unless `--hours` is supplied; inspect its estimate first.
 
 The printed runtime is a workload extrapolation, including measured component speedups and
 transfer/startup costs. It is not a measured overnight runtime or a promise to finish within
@@ -146,7 +166,7 @@ python run_benchmarks.py --tier overnight --report-only
 `reduced`, `overnight_full`, `overnight`, `pilot`, `small`, and `smoke` preserve their older
 settings and output directories. They do not inherit the corrected paper protocol.
 The 150-iteration tiers can take days; a short suite deadline can stop their first method
-before evaluation. Use `paper_overnight` for the bounded overnight comparison.
+before evaluation. Use `paper_optimized` for the bounded overnight comparison.
 
 `ENABLED_METHODS` near the top of `run_benchmarks.py` selects the default methods; `--arms`
 overrides it for one command. Curiosity, memory and sign-flip variants remain optional research

@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+from pathlib import Path
 import subprocess
 import sys
 import time
@@ -45,6 +46,7 @@ def main():
     ap.add_argument("--tier", choices=tiers())
     ap.add_argument("--seeds", nargs="+", type=int, default=[0])
     ap.add_argument("--skip-base", action="store_true")
+    ap.add_argument("--include-runs", nargs="+", help="reuse compatible completed seeds/base from these roots")
     ap.add_argument("--max-seconds", type=float, default=0,
                     help="wall-clock limit across training/evaluation; 0 disables it")
     ap.add_argument("overrides", nargs="*", help="dotted overrides applied to every run")
@@ -65,7 +67,20 @@ def main():
 
 
 def run_suite(args, selected, deadline=None):
-    if not args.skip_base:
+    provided, reuse_base = set(), False
+    if getattr(args, "include_runs", None):
+        from benchmarks.report import run_dirs, validate_combined_runs
+        roots = [Path(p) for p in args.include_runs]
+        if any(not p.is_dir() for p in roots):
+            raise ValueError("every --include-runs directory must exist")
+        planned = [load(arm, args.tier, args.overrides, seed) for seed in args.seeds for arm in selected]
+        sources = validate_combined_runs([Path(planned[0].out_dir), *roots], planned[0].eval.split,
+                                        arms=selected, planned=planned)
+        reuse_base = "base" in sources
+        provided = {(arm, int(d.name.rsplit("_s", 1)[1]))
+                    for d, arm in run_dirs(roots, arms=selected, split=planned[0].eval.split)
+                    if arm != "base" and (d / f"eval_{planned[0].eval.split}.json").exists()}
+    if not args.skip_base and not reuse_base:
         cfg = load(BASE, args.tier, args.overrides)
         if not _matching_eval(eval_path(cfg, base=True), cfg):
             run("benchmarks.evaluate", BASE, args.tier, 0, args.overrides, "--base", deadline=deadline)
@@ -73,6 +88,9 @@ def run_suite(args, selected, deadline=None):
     for seed in args.seeds:
         for arm in selected:
             cfg = load(arm, args.tier, args.overrides, seed)
+            if (arm, seed) in provided:
+                print(f"skip {arm} s{seed} (compatible included run)")
+                continue
             if _matching_eval(eval_path(cfg), cfg):
                 print(f"skip {cfg.name} s{seed} (done)")
                 continue

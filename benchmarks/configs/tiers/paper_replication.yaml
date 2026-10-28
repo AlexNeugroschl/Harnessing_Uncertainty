@@ -1,0 +1,7 @@
+# Same 12-iteration learning protocol as the completed paper_overnight seed 0.
+# Use --seeds 1 2 --skip-base --include-runs runs/paper_overnight to reuse that evidence.
+inherit: paper_optimized.yaml
+out_dir: runs/paper_replication
+train:
+  iterations: 12
+  save_every: 4

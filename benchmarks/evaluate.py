@@ -51,6 +51,30 @@ def select_tasks(tasks, bench, ec):
     return [tasks[i] for i in sorted(pick)]
 
 
+def evaluation_protocol(cfg: Config) -> dict:
+    ec = cfg.eval
+    protocol = {"split": ec.split, "max_steps": ec.max_steps, "greedy": ec.greedy,
+                "backend": cfg.policy.backend, "model": cfg.policy.model_name,
+                "max_new_tokens": cfg.policy.max_new_tokens,
+                "selection": ec.selection, "selection_seed": ec.selection_seed,
+                "history_length": cfg.env.get("history_length", 2)}
+    if not ec.greedy and ec.temperature is not None:
+        protocol["temperature"] = ec.temperature
+    if cfg.env.get("action_parser", "strict") != "strict":
+        protocol["action_parser"] = cfg.env["action_parser"]
+    if ec.sampling_seed is not None:
+        protocol["sampling_seed"] = ec.sampling_seed
+    if cfg.policy.max_prompt_tokens:
+        protocol["max_prompt_tokens"] = cfg.policy.max_prompt_tokens
+    if cfg.env.get("memory", False):
+        protocol["memory"] = True
+    if cfg.policy.dtype != "bfloat16":
+        protocol["dtype"] = cfg.policy.dtype
+    if not ec.greedy and cfg.policy.top_p != 1.:
+        protocol["top_p"] = cfg.policy.top_p
+    return protocol
+
+
 def evaluate(policy: LLMPolicy, cfg: Config, log=print) -> tuple[dict, dict]:
     ec = cfg.eval
     if not ec.greedy and ec.temperature is not None and (
@@ -94,19 +118,7 @@ def evaluate(policy: LLMPolicy, cfg: Config, log=print) -> tuple[dict, dict]:
     res["n"] = {t: len(v) for t, v in by_type.items()}
     res["resp_len"] = length_stats(lengths, policy.cfg.max_new_tokens)
     res.update(seed=cfg.seed, per_task=per_task, config_fingerprint=config_fingerprint(cfg),
-               protocol={"split": ec.split, "max_steps": ec.max_steps, "greedy": ec.greedy,
-                         "backend": cfg.policy.backend, "model": cfg.policy.model_name,
-                         "max_new_tokens": cfg.policy.max_new_tokens,
-                         "selection": ec.selection, "selection_seed": ec.selection_seed,
-                         "history_length": cfg.env.get("history_length", 2)})
-    if not ec.greedy and ec.temperature is not None:
-        res["protocol"]["temperature"] = ec.temperature
-    if cfg.env.get("action_parser", "strict") != "strict":
-        res["protocol"]["action_parser"] = cfg.env["action_parser"]
-    if ec.sampling_seed is not None:
-        res["protocol"]["sampling_seed"] = ec.sampling_seed
-    if cfg.policy.max_prompt_tokens:
-        res["protocol"]["max_prompt_tokens"] = cfg.policy.max_prompt_tokens
+               protocol=evaluation_protocol(cfg))
     return res, {"cap": policy.cfg.max_new_tokens, **lengths}
 
 

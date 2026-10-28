@@ -1,0 +1,13 @@
+# More training with the same paper objective; historical paper_overnight stays reproducible.
+inherit: paper_overnight.yaml
+out_dir: runs/paper_optimized
+policy:
+  score_batch_size: 2
+  micro_batch_size: 2
+  micro_batch_tokens: 2560
+  cuda_memory_fraction: 0.75
+  head_chunk_size: 256
+  head_backend: analytic
+train:
+  iterations: 20
+  save_every: 5
