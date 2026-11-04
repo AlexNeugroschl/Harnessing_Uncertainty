@@ -205,6 +205,7 @@ def test_default_uses_corrected_fast_lora_comparison(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("args,venv", [([], "empg-vllm"), (["--tier", "overnight_full"], "empg"),
                                       (["--tier=paper_lora_fast"], "empg-vllm"),
+                                      (["--tier", "curiosity_screen"], "empg-vllm"),
                                       (["--", "policy.backend=hf"], "empg")])
 def test_windows_selects_interpreter_for_backend(monkeypatch, args, venv):
     monkeypatch.setattr(runner, "ROOT", Path("C:/Project/Harnessing_Uncertainty"))

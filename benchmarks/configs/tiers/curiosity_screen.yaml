@@ -1,0 +1,14 @@
+# Small mechanism/early-behavior check; too few updates to establish a winner.
+# Use GRPO and EMPG alongside their curiosity variants as matched controls.
+inherit: paper_optimized.yaml
+out_dir: runs/curiosity_screen
+train:
+  iterations: 2
+  games_per_iter: 2
+  group_size: 4
+  max_steps: 20
+  save_every: 0
+eval:
+  split: valid_seen
+  max_tasks: 12
+  max_steps: 50

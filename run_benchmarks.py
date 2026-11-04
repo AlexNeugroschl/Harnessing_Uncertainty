@@ -24,7 +24,8 @@ import time
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_TIER = "paper_optimized"
-FAST_TIERS = ("paper_lora_fast", "paper_overnight", "paper_optimized", "paper_replication", "paper_lr_pilot")
+FAST_TIERS = ("paper_lora_fast", "paper_overnight", "paper_optimized", "paper_replication", "paper_lr_pilot",
+              "curiosity_screen")
 
 # Comment/uncomment one line per method to choose the default experiment.
 # --arms overrides this list. The untrained base model is evaluated separately

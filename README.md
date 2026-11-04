@@ -399,6 +399,11 @@ python -m benchmarks.profile --config empg --tier small --turns 3 --samples 8
 # Inspect exploration, successful groups and truncation before training.
 python -m benchmarks.explore_stats --config grpo --tier pilot --games 12 --group 4 --games-per-batch 2
 
+# Small curiosity check: 2 updates per method, 4 siblings, 20-turn training;
+# evaluate the same 12 valid_seen tasks with the full 50-turn limit.
+# This checks mechanisms and early behavior, not which method learns best.
+python run_benchmarks.py --tier curiosity_screen --arms grpo grpo_cur_episodic grpo_cur_group empg empg_cur_episodic --seeds 0 --skip-base
+
 # Development screen: 8 iterations, group 4, 30-turn training, 50-turn evaluation.
 # valid_seen is used for selection; keep valid_unseen for a fixed confirmation run.
 python -m benchmarks.suite --tier pilot --arms grpo grpo_cur_episodic --seeds 0 --skip-base
