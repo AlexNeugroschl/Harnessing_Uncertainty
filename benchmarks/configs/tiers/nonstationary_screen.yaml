@@ -1,0 +1,13 @@
+# Pipeline/mechanism screen, not evidence of a learning advantage.
+inherit: nonstationary.yaml
+out_dir: runs/nonstationary_screen
+train:
+  iterations: 6
+  group_size: 4
+nonstationary:
+  switch_iteration: 4
+  probe_every: 3
+  probe_tasks: 6
+eval:
+  split: valid_seen
+  max_tasks: 12

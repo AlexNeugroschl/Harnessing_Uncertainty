@@ -494,11 +494,14 @@ def main():
     (out / "curiosity_comparisons.json").write_text(json.dumps(curiosity_pairs, indent=2))
     all_rows = with_extra_arms([("base", "Zero-shot base"), *ARMS], evals)
     individual = write_run_comparison(runs, args.split, out, args.arms, args.seeds)
+    from benchmarks.adaptation import write_report as adaptation_report
+    adaptation = adaptation_report(runs, out, args.seeds, args.arms)
     combined = (f"# ALFWorld `{args.split}` benchmark comparison\n\n"
                 "Success rates are percentages; ± is sample standard deviation across training seeds. "
                 "Paired intervals below are unadjusted for multiple comparisons. "
                 "Selecting a winner among many methods needs fresh confirmation.\n\n"
-                + table(evals, all_rows, SUBTASKS) + "\n" + paired_md + "\n" + curiosity_md + "\n" + individual)
+                + table(evals, all_rows, SUBTASKS) + "\n" + paired_md + "\n" + curiosity_md + "\n" + individual
+                + "\n" + adaptation)
     (out / "comparison.md").write_text(combined, encoding="utf-8")
     if curves:
         plot(curves, out / "training_curves.png")

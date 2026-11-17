@@ -51,7 +51,7 @@ def select_tasks(tasks, bench, ec):
     return [tasks[i] for i in sorted(pick)]
 
 
-def evaluation_protocol(cfg: Config) -> dict:
+def evaluation_protocol(cfg: Config, regime=None) -> dict:
     ec = cfg.eval
     protocol = {"split": ec.split, "max_steps": ec.max_steps, "greedy": ec.greedy,
                 "backend": cfg.policy.backend, "model": cfg.policy.model_name,
@@ -72,11 +72,19 @@ def evaluation_protocol(cfg: Config) -> dict:
         protocol["dtype"] = cfg.policy.dtype
     if not ec.greedy and cfg.policy.top_p != 1.:
         protocol["top_p"] = cfg.policy.top_p
+    if cfg.nonstationary.enabled:
+        protocol["intervention"] = cfg.nonstationary.intervention(
+            regime or cfg.nonstationary.evaluation_regime())
+    if cfg.train.reward_source != "success":
+        protocol["reward_source"] = cfg.train.reward_source
+        protocol["environment_reward_scale"] = cfg.train.environment_reward_scale
     return protocol
 
 
-def evaluate(policy: LLMPolicy, cfg: Config, log=print) -> tuple[dict, dict]:
+def evaluate(policy: LLMPolicy, cfg: Config, log=print, *, regime=None, benchmark=None) -> tuple[dict, dict]:
     ec = cfg.eval
+    nc = cfg.nonstationary
+    nc.validate()
     if not ec.greedy and ec.temperature is not None and (
             not np.isfinite(ec.temperature) or ec.temperature <= 0):
         raise ValueError("stochastic eval.temperature must be finite and positive")
@@ -86,9 +94,11 @@ def evaluate(policy: LLMPolicy, cfg: Config, log=print) -> tuple[dict, dict]:
     per_task = []
     lengths = {"len": [], "truncated": [], "valid": []}
     with ExitStack() as cleanup:
-        bench = make_benchmark(cfg.benchmark, **cfg.env)
-        if hasattr(bench, "close"):
+        bench = benchmark if benchmark is not None else make_benchmark(cfg.benchmark, **cfg.env)
+        if benchmark is None and hasattr(bench, "close"):
             cleanup.callback(bench.close)
+        if nc.enabled:
+            bench.intervention = nc.intervention(regime or nc.evaluation_regime())
         tasks = select_tasks(bench.tasks(ec.split), bench, ec)
         if not tasks:
             raise ValueError("empty evaluation split")
@@ -104,12 +114,16 @@ def evaluate(policy: LLMPolicy, cfg: Config, log=print) -> tuple[dict, dict]:
             log(f"  eval tasks {s + 1}-{s + len(chunk)}/{len(tasks)} starting")
             trajs = run_episodes(policy, bench, chunk, list(range(len(chunk))), ec.max_steps,
                                  cfg.train.success_reward, cfg.train.invalid_penalty,
+                                 reward_source=cfg.train.reward_source,
+                                 environment_reward_scale=cfg.train.environment_reward_scale,
                                  greedy=ec.greedy, progress=lambda turn, active: log(
                                      f"    turn {turn}/{ec.max_steps}, {active} active"))
             for tr in trajs:
                 by_type[bench.task_type(tr.task)].append(tr.won)
                 per_task.append({"task": tr.task, "type": bench.task_type(tr.task),
                                  "won": tr.won, "steps": len(tr.steps), "invalid": tr.n_invalid})
+                if nc.enabled or cfg.train.reward_source == "environment":
+                    per_task[-1].update(env_return=tr.env_return, **tr.intervention_metrics)
             for k, v in response_lengths(trajs).items():
                 lengths[k] += v
             log(f"  eval {min(s + ec.batch_envs, len(tasks))}/{len(tasks)}")
@@ -118,7 +132,9 @@ def evaluate(policy: LLMPolicy, cfg: Config, log=print) -> tuple[dict, dict]:
     res["n"] = {t: len(v) for t, v in by_type.items()}
     res["resp_len"] = length_stats(lengths, policy.cfg.max_new_tokens)
     res.update(seed=cfg.seed, per_task=per_task, config_fingerprint=config_fingerprint(cfg),
-               protocol=evaluation_protocol(cfg))
+               protocol=evaluation_protocol(cfg, regime))
+    if nc.enabled or cfg.train.reward_source == "environment":
+        res["env_return"] = float(np.mean([r["env_return"] for r in per_task]))
     return res, {"cap": policy.cfg.max_new_tokens, **lengths}
 
 

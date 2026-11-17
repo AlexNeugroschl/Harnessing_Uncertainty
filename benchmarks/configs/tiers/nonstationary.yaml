@@ -1,0 +1,25 @@
+# Curiosity experiment; the algorithm and curiosity scope remain arm controls.
+inherit: paper_optimized.yaml
+out_dir: runs/nonstationary
+train:
+  iterations: 40
+  save_every: 0
+  reward_source: environment
+  environment_reward_scale: 10.0
+nonstationary:
+  enabled: true
+  change: rules
+  schedule: switch
+  switch_iteration: 21
+  initial_regime: baseline
+  final_regime: inspection
+  stationary_regime: baseline
+  actions: [take]
+  consume_inspection: false
+  probe_every: 10
+  probe_tasks: 12
+  probe_split: valid_seen
+  probe_regimes: [baseline, inspection]
+  probe_seed: 0
+  eval_regime: final
+  recovery_fraction: 0.9

@@ -84,6 +84,25 @@ def test_token_budget_bounds_padding_without_dropping_or_reordering_rows():
         list(token_microbatches([0], [21], 4, 20))
 
 
+def test_native_reward_signal_updates_policy_without_binary_success():
+    policy = tiny_policy()
+    cfg = Config(policy=policy.cfg)
+    cfg.advantage.method = "grpo"
+    cfg.train.kl_coef, cfg.train.entropy_coef = 0., 0.
+    cfg.train.reward_mode, cfg.train.reward_source = "step", "environment"
+    cfg.train.mini_batches = 1
+    trajectories = [Trajectory("t", 0, [Step([1, 2], [3, 4], "", "look", True)], env_return=-1.),
+                    Trajectory("t", 0, [Step([1, 2], [5, 6], "", "look", True)], env_return=1.)]
+    for tr in trajectories:
+        tr.init_keys = {"obs": "start"}
+        tr.steps[0].state_keys = {"obs": "end"}
+    before = {k: v.clone() for k, v in policy.model.state_dict().items()}
+    stats = update(policy, torch.optim.AdamW(policy.parameters(), lr=1e-3), trajectories,
+                   cfg, np.random.default_rng(0))
+    assert stats["success"] == 0. and stats["adv_std"] > 0.
+    assert any(not torch.equal(v, before[k]) for k, v in policy.model.state_dict().items())
+
+
 def test_selective_checkpointing_preserves_gradients_without_adding_hooks():
     policy = tiny_policy()
     policy.cfg.gradient_checkpointing = True

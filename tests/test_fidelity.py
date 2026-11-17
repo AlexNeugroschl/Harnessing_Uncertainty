@@ -91,7 +91,9 @@ def test_reference_dual_clip_only_bounds_negative_advantage_tails():
 def test_new_options_do_not_invalidate_disabled_legacy_configurations():
     cfg = load("grpo", "overnight_full")
     legacy = dataclasses.asdict(cfg)
-    for section, keys in {"train": ["entropy_coef", "reward_mode", "mini_batch_size", "shuffle", "dual_clip"],
+    legacy.pop("nonstationary")
+    for section, keys in {"train": ["entropy_coef", "reward_mode", "mini_batch_size", "shuffle", "dual_clip",
+                                      "reward_source", "environment_reward_scale"],
                           "policy": ["amp", "vllm_max_num_seqs", "max_prompt_tokens",
                                      "score_batch_size", "micro_batch_tokens", "cuda_memory_fraction",
                                      "head_backend", "head_checkpointing", "checkpoint_min_tokens"],

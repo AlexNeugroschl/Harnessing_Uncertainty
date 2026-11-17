@@ -16,6 +16,7 @@ import yaml
 
 from empg.advantages import AdvantageConfig
 from empg.policy import PolicyConfig
+from empg.nonstationary import NonstationaryConfig
 
 
 @dataclass
@@ -31,6 +32,8 @@ class TrainConfig:
     kl_coef: float = 0.01
     entropy_coef: float = 0.0    # differentiable entropy bonus; distinct from EMPG's detached H_t
     reward_mode: str = "trajectory"  # legacy episode penalties | verl step scores/group normalization
+    reward_source: str = "success"  # success | environment (sum of native step rewards)
+    environment_reward_scale: float = 1.0
     clip_low: float = 0.2
     clip_high: float = 0.2       # > clip_low gives DAPO's clip-higher
     dual_clip: float = 0.0       # 0: legacy PPO; pinned Verl actor bounds negative advantages at 3
@@ -68,6 +71,7 @@ class Config:
     advantage: AdvantageConfig = field(default_factory=AdvantageConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)
+    nonstationary: NonstationaryConfig = field(default_factory=NonstationaryConfig)
 
     @property
     def run_dir(self) -> Path:
@@ -77,9 +81,18 @@ class Config:
 def _optional_defaults(data: dict) -> dict:
     """Keep legacy artifact fingerprints valid when new options are disabled."""
     result = dict(data)
+    if not result.get("nonstationary", {}).get("enabled", False):
+        result.pop("nonstationary", None)
+    elif "nonstationary" in result:
+        result["nonstationary"] = dict(result["nonstationary"])
+        for key, default in {"feedback": "explicit", "competence_min_success": .1,
+                             "competence_min_successes": 2}.items():
+            if result["nonstationary"].get(key) == default:
+                result["nonstationary"].pop(key, None)
     for section, defaults in {
         "train": {"entropy_coef": 0.0, "reward_mode": "trajectory", "mini_batch_size": 0,
-                  "shuffle": True, "dual_clip": 0.0},
+                  "shuffle": True, "dual_clip": 0.0, "reward_source": "success",
+                  "environment_reward_scale": 1.0},
         "policy": {"amp": False, "vllm_max_num_seqs": 256, "max_prompt_tokens": 0,
                    "checkpoint_min_tokens": 0,
                    "score_batch_size": 0, "micro_batch_tokens": 0, "cuda_memory_fraction": 0.0,
@@ -148,4 +161,8 @@ def load_config(path: str | None = None, overrides: list[str] | None = None,
         for p in parents:
             node = node.setdefault(p, {})
         node[leaf] = yaml.safe_load(val)
-    return _build(Config, data)
+    cfg = _build(Config, data)
+    cfg.nonstationary.validate(cfg.train.iterations)
+    if cfg.train.reward_source not in ("success", "environment"):
+        raise ValueError("train.reward_source must be success or environment")
+    return cfg

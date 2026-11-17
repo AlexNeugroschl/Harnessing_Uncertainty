@@ -25,17 +25,18 @@ import time
 ROOT = Path(__file__).resolve().parent
 DEFAULT_TIER = "paper_optimized"
 FAST_TIERS = ("paper_lora_fast", "paper_overnight", "paper_optimized", "paper_replication", "paper_lr_pilot",
-              "curiosity_screen")
+              "curiosity_screen", "nonstationary", "nonstationary_screen", "nonstationary_overnight")
 
 # Comment/uncomment one line per method to choose the default experiment.
 # --arms overrides this list. The untrained base model is evaluated separately
 # unless --skip-base is passed. "grpo" is the regular trained baseline.
 # These are research priorities, not an empirically established performance ranking.
+# Original replication defaults; run_nonstationary.py runs the main curiosity experiment.
 ENABLED_METHODS = [
     "grpo",                   # Regular GRPO: outcome-reward baseline.
     "empg",                   # EMPG: entropy scaling + future clarity.
-    # "grpo_cur_group",       # Optional extension after the GRPO/EMPG comparison.
-    # "empg_cur_episodic",    # Optional extension after the GRPO/EMPG comparison.
+    # "grpo_cur_group",       # Sibling-rollout novelty control.
+    # "empg_cur_episodic",    # Curiosity on the EMPG comparison backbone.
     # "grpo_cur_episodic",     # Per-episode novelty; next control for novelty scope.
     # "grpo_memory",           # Visited-location prompt; control for forgetting.
     # "grpo_cur_oracle",       # Privileged physical-state novelty diagnostic.
@@ -45,7 +46,7 @@ ENABLED_METHODS = [
 ]
 
 
-def launch_in_wsl(argv):
+def launch_in_wsl(argv, entrypoint="run_benchmarks.py"):
     root = PureWindowsPath(str(ROOT))
     if not root.drive or root.drive.startswith("\\\\"):
         raise ValueError("Put the repository on a local Windows drive or run inside WSL.")
@@ -63,9 +64,9 @@ def launch_in_wsl(argv):
         if arg.startswith("policy.backend="):
             backend = arg.split("=", 1)[1]
     venv = "empg-vllm" if backend == "vllm" else "empg"
-    invocation = ([python, "run_benchmarks.py", *argv] if python else
+    invocation = ([python, entrypoint, *argv] if python else
                   ["bash", "-lc", f'exec "$HOME/venvs/{venv}/bin/python" "$@"',
-                   "run_benchmarks", "run_benchmarks.py", *argv])
+                   "run_benchmarks", entrypoint, *argv])
     cmd = ["wsl.exe", "--distribution", os.environ.get("EMPG_WSL_DISTRO", "Ubuntu-24.04"),
            "--cd", linux_root, "--exec", *invocation]
     return subprocess.call(cmd)
@@ -165,35 +166,47 @@ def estimate(cfg, *, train=True, evaluate=True):
         training = min(training, cfg.train.max_seconds + batch_seconds)
     # Actual task count if the data is installed; no GPU/model load.
     task_count = cfg.eval.max_tasks
-    if evaluate:
+    probe_count = len(cfg.nonstationary.probe_iterations(cfg.train.iterations)) if train else 0
+    probe_tasks = 0
+    if evaluate or probe_count:
         from empg.envs.base import make_benchmark
         bench = make_benchmark(cfg.benchmark, **cfg.env)
         try:
             available = len(bench.tasks(cfg.eval.split))
             task_count = min(task_count, available) if task_count > 0 else available
+            if probe_count:
+                from benchmarks.evaluate import select_tasks
+                panel = bench.tasks(cfg.nonstationary.probe_split)
+                select_tasks(panel, bench, cfg.nonstationary.probe_eval_config(cfg.eval))
+                available_probes = len(panel)
+                probe_tasks = min(cfg.nonstationary.probe_tasks, available_probes) if cfg.nonstationary.probe_tasks else available_probes
         finally:
             if hasattr(bench, "close"):
                 bench.close()
-    evaluation = 0.
-    if evaluate:
+    def evaluation_cost(count):
+        cost = 0.
         # Account for the partially filled final environment/generation batch.
-        for start in range(0, task_count, cfg.eval.batch_envs):
-            chunk = min(cfg.eval.batch_envs, task_count - start)
+        for start in range(0, count, cfg.eval.batch_envs):
+            chunk = min(cfg.eval.batch_envs, count - start)
             for offset in range(0, chunk, cfg.policy.gen_batch_size):
                 n = min(cfg.policy.gen_batch_size, chunk - offset)
                 rate = .65 * (24 / min(n, 32)) ** .5 / decode_speedup
-                evaluation += n * cfg.eval.max_steps * (
+                cost += n * cfg.eval.max_steps * (
                     rate * tokens + 2.51 / 80 * env_scale)
-        evaluation += task_count * 12.72 / 16 * env_scale
+        cost += count * 12.72 / 16 * env_scale
         if observed:
             # Completed suite's non-training time, allowing for process startup,
             # was about 65% of the earlier evaluation extrapolation.
-            evaluation *= .65
+            cost *= .65
+        return cost
+    evaluation = evaluation_cost(task_count) if evaluate else 0.
+    probe_seconds = probe_count * len(cfg.nonstationary.probe_regimes) * evaluation_cost(probe_tasks)
     startup = 75 if cfg.policy.backend == "vllm" else 30
     phases = 1 if train and evaluate and cfg.eval.sampling_seed is not None else int(train) + int(evaluate)
-    central = training + evaluation + startup * phases
+    central = training + evaluation + probe_seconds + startup * phases
     return {"seconds": central, "low_seconds": central * .5, "high_seconds": central * 1.5,
             "training_seconds": training, "evaluation_seconds": evaluation,
+            "probe_seconds": probe_seconds,
             "eval_tasks": task_count, "training_steps_at_caps": batches * steps if train else 0}
 
 

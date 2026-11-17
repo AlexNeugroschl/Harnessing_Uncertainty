@@ -190,7 +190,8 @@ class ALFWorldBenchmark:
     name = "alfworld"
 
     def __init__(self, data_dir: str | None = None, history_length: int = 2,
-                 memory: bool = False, workers: int = 0, action_parser: str = "strict"):
+                 memory: bool = False, workers: int = 0, action_parser: str = "strict",
+                 intervention: dict | None = None):
         self.data_dir = data_dir
         self.history_length = history_length
         self.memory = memory  # list visited locations in the prompt (H6 baseline)
@@ -201,6 +202,7 @@ class ALFWorldBenchmark:
             raise ValueError("env.workers must be nonnegative")
         self.workers = workers
         self._pool = None
+        self.intervention = intervention
 
     def episode_batch(self, tasks):
         from empg.envs.batch import ALFWorldPool, ParallelBatch, SerialBatch
@@ -208,7 +210,7 @@ class ALFWorldBenchmark:
             return SerialBatch(self, tasks)
         if self._pool is None:
             self._pool = ALFWorldPool(min(self.workers, len(tasks)))
-        return ParallelBatch(self._pool, tasks)
+        return ParallelBatch(self._pool, tasks, self.intervention)
 
     def close(self):
         if self._pool is not None:
@@ -219,6 +221,9 @@ class ALFWorldBenchmark:
         return collect_games(split, self.data_dir)
 
     def make_env(self, task: str) -> ALFWorldEnv:
+        if self.intervention:
+            from empg.nonstationary import wrap_env
+            return wrap_env(ALFWorldEnv(task), self.intervention)
         return ALFWorldEnv(task)
 
     def task_type(self, task: str) -> str:

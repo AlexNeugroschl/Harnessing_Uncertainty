@@ -34,6 +34,8 @@ class Trajectory:
     won: bool = False
     reward: float = 0.0  # outcome reward used by the advantage estimator
     init_keys: dict = field(default_factory=dict)  # state keys of the reset state s_0
+    env_return: float = 0.0       # extrinsic reward without curiosity/format penalties
+    intervention_metrics: dict = field(default_factory=dict)
 
     @property
     def n_invalid(self) -> int:
@@ -54,11 +56,14 @@ def run_episodes(policy, bench: Benchmark, tasks: list[str], groups: list[int],
                  max_steps: int, success_reward: float = 10.0,
                  invalid_penalty: float = 0.1, greedy: bool = False,
                  timings: dict | None = None,
-                 progress: Callable[[int, int], None] | None = None) -> list[Trajectory]:
+                 progress: Callable[[int, int], None] | None = None,
+                 reward_source: str = "success", environment_reward_scale: float = 1.0) -> list[Trajectory]:
     """Play one episode per (task, group) pair; all envs advance one turn per
     batched generate() call."""
     if len(tasks) != len(groups) or not tasks or max_steps < 1:
         raise ValueError("rollout needs matching nonempty tasks/groups and positive max_steps")
+    if reward_source not in ("success", "environment") or not np.isfinite(environment_reward_scale):
+        raise ValueError("invalid reward_source/environment_reward_scale")
     batch = bench.episode_batch(tasks) if hasattr(bench, "episode_batch") else SerialBatch(bench, tasks)
     trajs = [Trajectory(task=t, group=g) for t, g in zip(tasks, groups)]
     times = {"t_env_reset": 0.0, "t_generate": 0.0, "t_env_step": 0.0}
@@ -88,7 +93,7 @@ def run_episodes(policy, bench: Benchmark, tasks: list[str], groups: list[int],
                 results = batch.step(active, [a for a, _ in parsed])
                 times["t_env_step"] += time.perf_counter() - start
                 still = []
-                for i, p, r, text, (action, valid), (o, _, done, info) in zip(
+                for i, p, r, text, (action, valid), (o, env_reward, done, info) in zip(
                         active, p_ids, r_ids, texts, parsed, results):
                     trajs[i].steps.append(Step(p, r, text, action, valid, obs=o,
                                                state_keys=_keys(o, info),
@@ -96,6 +101,10 @@ def run_episodes(policy, bench: Benchmark, tasks: list[str], groups: list[int],
                     info.setdefault("task", infos[i]["task"])
                     history[i].append((obs[i], action))
                     obs[i], infos[i] = o, info
+                    trajs[i].env_return += float(env_reward)
+                    for key, value in info.get("intervention_metrics", {}).items():
+                        metrics = trajs[i].intervention_metrics
+                        metrics[key] = metrics.get(key, 0) + value
                     if info.get("won"):
                         trajs[i].won = True
                     if not done:
@@ -109,7 +118,8 @@ def run_episodes(policy, bench: Benchmark, tasks: list[str], groups: list[int],
             timings.update(times)
 
     for tr in trajs:
-        tr.reward = success_reward * tr.won - invalid_penalty * tr.n_invalid
+        outcome = success_reward * tr.won if reward_source == "success" else environment_reward_scale * tr.env_return
+        tr.reward = outcome - invalid_penalty * tr.n_invalid
     return trajs
 
 

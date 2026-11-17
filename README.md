@@ -169,9 +169,9 @@ The 150-iteration tiers can take days; a short suite deadline can stop their fir
 before evaluation. Use `paper_optimized` for the bounded overnight comparison.
 
 `ENABLED_METHODS` near the top of `run_benchmarks.py` selects the default methods; `--arms`
-overrides it for one command. Curiosity, memory and sign-flip variants remain optional research
-extensions. Enable them after establishing the GRPO/EMPG comparison, and compare each against
-its matching control. More methods or seeds add cost and can leave later methods unfinished.
+overrides it for one command. The original GRPO/EMPG replication defaults remain available.
+Use `run_nonstationary.py` for the main curiosity experiment, and compare each curiosity
+variant against its matching control. More methods or seeds add cost and can leave later methods unfinished.
 
 Training and evaluation reuse one loaded model/engine for corrected tiers. Explicit evaluation
 sampling seeds isolate evaluation from training RNG consumption. Adapters reload after updates,
@@ -241,6 +241,25 @@ differences while retaining LoRA and a smaller game batch; see the fidelity revi
 | Framework | verl-agent (vLLM rollouts) | HF `generate` (~15 min per iteration on an RTX 5060 8GB) |
 
 ## Curiosity extension (research in progress)
+
+Curiosity and intrinsic motivation for long-horizon tasks are the research focus;
+GRPO is the outcome-reward control and EMPG is a comparison/starting point.
+The [non-stationary curiosity experiment](docs/nonstationary_curiosity.md) adds
+toggleable changes to environment rules or rewards, stationary controls, fixed
+held-out adaptation probes, and an optimized four-condition runner:
+
+```bash
+python run_nonstationary.py --estimate-only
+python run_nonstationary.py --hours 8
+```
+
+For the overnight comparison with matched stationary rules, generic feedback, and
+a shared workload fitted to eight hours:
+
+```powershell
+python run_nonstationary.py --tier nonstationary_overnight --hours 8 --fit-budget --estimate-only
+python run_nonstationary.py --tier nonstationary_overnight --hours 8 --fit-budget
+```
 
 The research question is whether a curiosity bonus, for reaching states the agent hasn't seen, helps on
 long-horizon, sparse-reward tasks. [docs/curiosity_research_plan.md](docs/curiosity_research_plan.md) has the

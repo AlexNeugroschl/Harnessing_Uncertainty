@@ -87,7 +87,9 @@ def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
     step_h = [s.entropy for s in steps]
     step_rewards = None
     if tc.reward_mode == "step":
-        step_rewards = np.array([tc.success_reward * trajs[t].won - tc.invalid_penalty * (not s.valid)
+        outcomes = [tc.success_reward * tr.won if tc.reward_source == "success"
+                    else tc.environment_reward_scale * tr.env_return for tr in trajs]
+        step_rewards = np.array([outcomes[t] - tc.invalid_penalty * (not s.valid)
                                  for t, s in zip(step_traj, steps)])
     elif tc.reward_mode != "trajectory":
         raise ValueError("train.reward_mode must be 'trajectory' or 'step'")
@@ -155,6 +157,12 @@ def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
     effective_intrinsic = adv - base_adv
     share = float(np.abs(effective_intrinsic).mean() / max(np.abs(adv).mean(), 1e-8))
     return {
+        "episodes": len(trajs),
+        "env_return_sum": sum(tr.env_return for tr in trajs),
+        "env_return": float(np.mean([tr.env_return for tr in trajs])),
+        **({key: sum(tr.intervention_metrics.get(key, 0) for tr in trajs)
+            for key in ("inspections", "rule_blocks", "prepared_actions", "alternative_success", "base_won")}
+           if cfg.nonstationary.enabled else {}),
         "t_score": score_seconds,
         **explore,
         "intrinsic_share": share,  # mean |A_with_curiosity - A_without| / mean |A_with|
@@ -195,6 +203,10 @@ def gpu_memory_check(log=print, _warned=[False]) -> dict:
 
 def train(cfg: Config, log=print) -> LLMPolicy:
     tc = cfg.train
+    nc = cfg.nonstationary
+    nc.validate(tc.iterations)
+    if tc.reward_source not in ("success", "environment") or not np.isfinite(tc.environment_reward_scale):
+        raise ValueError("invalid train.reward_source/environment_reward_scale")
     if min(tc.iterations, tc.games_per_iter, tc.max_steps, tc.mini_batches, tc.ppo_epochs) < 1:
         raise ValueError("training counts/horizon must be positive")
     if tc.group_size < 2:
@@ -228,9 +240,14 @@ def train(cfg: Config, log=print) -> LLMPolicy:
     (run_dir / "config.json").write_text(json.dumps(config_dict(cfg), indent=2))
 
     bench = make_benchmark(cfg.benchmark, **cfg.env)
+    if nc.enabled:
+        bench.intervention = nc.intervention(nc.regime_at(1))
     train_tasks = bench.tasks("train")
     if tc.games_per_iter > len(train_tasks):
         raise ValueError("games_per_iter exceeds the available training tasks")
+    if nc.enabled and nc.probe_every:
+        from benchmarks.evaluate import select_tasks
+        select_tasks(bench.tasks(nc.probe_split), bench, nc.probe_eval_config(cfg.eval))
     policy = LLMPolicy(cfg.policy, seed=cfg.seed)
     opt = torch.optim.AdamW(policy.parameters(), lr=cfg.train.lr,
                             weight_decay=cfg.train.weight_decay)
@@ -250,8 +267,17 @@ def train(cfg: Config, log=print) -> LLMPolicy:
         if hasattr(bench, "close"):
             cleanup.callback(bench.close)
         cleanup.enter_context(_close_policy_on_error(policy))
+        probes = None
+        probe_points = set(nc.probe_iterations(tc.iterations))
+        if probe_points:
+            from benchmarks.adaptation import AdaptationProbes
+            probes = AdaptationProbes(policy, cfg, log)
+            cleanup.callback(probes.close)
+            probes.run(0, env_steps_total=0, response_tokens_total=0, seconds_total=0.)
         for it in range(1, tc.iterations + 1):
             t0 = time.time()
+            if nc.enabled:
+                bench.intervention = nc.intervention(nc.regime_at(it))
             chosen = task_rng.choice(len(train_tasks), tc.games_per_iter, replace=False)
             tasks = [train_tasks[c] for c in chosen for _ in range(tc.group_size)]
             groups = [g for g in range(tc.games_per_iter) for _ in range(tc.group_size)]
@@ -260,6 +286,7 @@ def train(cfg: Config, log=print) -> LLMPolicy:
                 f"{tc.games_per_iter} games, {len(tasks)} trajectories")
             trajs = run_episodes(policy, bench, tasks, groups, tc.max_steps,
                                  tc.success_reward, tc.invalid_penalty, timings=rollout_times,
+                                 reward_source=tc.reward_source, environment_reward_scale=tc.environment_reward_scale,
                                  progress=lambda turn, active: log(
                                      f"  rollout turn {turn}/{tc.max_steps}, {active} active"))
             t1 = time.time()
@@ -272,6 +299,14 @@ def train(cfg: Config, log=print) -> LLMPolicy:
             cumulative_seconds += stats["t_rollout"] + stats["t_update"]
             stats.update(env_steps_total=cumulative_steps, response_tokens_total=cumulative_tokens,
                          seconds_total=cumulative_seconds, tasks=[train_tasks[c] for c in chosen])
+            if nc.enabled:
+                stats.update(regime=nc.regime_at(it), change=nc.change)
+                ending = ((tc.max_env_steps and cumulative_steps >= tc.max_env_steps) or
+                          (tc.max_seconds and cumulative_seconds >= tc.max_seconds))
+                if probes and (it in probe_points or ending):
+                    probes.run(it, env_steps_total=cumulative_steps, response_tokens_total=cumulative_tokens,
+                               seconds_total=cumulative_seconds)
+                stats["probe_seconds_total"] = probes.seconds if probes else 0.
             mf.write(json.dumps(stats) + "\n")
             mf.flush()
             lf.write(json.dumps({"iteration": it, "cap": cfg.policy.max_new_tokens,

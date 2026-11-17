@@ -29,6 +29,7 @@ so every experiment compares against GRPO and EMPG under identical conditions.
 | Separate intrinsic/extrinsic normalisation (§3.3 option 3) | not yet | add only if Phase 2 shows the success signal being washed out |
 | Rollout-level exploration, Go-Explore branching (§3.3 options 4–5) | not yet | stretch goals |
 | Phase 5: Coin Collector, LLM surprisal, embedding / RND novelty, lifelong scope | not yet | optional |
+| Environment rule/reward shifts, stationary controls and held-out adaptation probes | done | [Non-stationary curiosity experiment](nonstationary_curiosity.md) |
 
 Checks so far:
 - All unit tests pass, including "η = 0 is bit-identical to GRPO/EMPG".

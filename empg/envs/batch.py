@@ -79,15 +79,17 @@ class ALFWorldPool:
 
 
 class ParallelBatch:
-    def __init__(self, pool, tasks):
+    def __init__(self, pool, tasks, intervention=None):
         self.pool = pool
+        self.intervention = intervention
         self.slots = [[] for _ in pool.workers]
         for i, task in enumerate(tasks):
             self.slots[i % len(self.slots)].append((i, task))
 
     def reset(self):
         results = self.pool.calls([
-            {"cmd": "reset", "tasks": [t for _, t in slots]} for slots in self.slots])
+            {"cmd": "reset", "tasks": [t for _, t in slots],
+             **({"intervention": self.intervention} if self.intervention else {})} for slots in self.slots])
         ordered = [None] * sum(map(len, self.slots))
         for slots, rows in zip(self.slots, results):
             for (i, _), row in zip(slots, rows):

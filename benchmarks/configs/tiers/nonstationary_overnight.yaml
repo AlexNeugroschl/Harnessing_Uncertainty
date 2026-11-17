@@ -1,0 +1,18 @@
+# Eight-hour exploratory comparison. The matrix can fit a common workload to --hours.
+# Constant inspection rules are the matched stationary control for the final regime.
+inherit: nonstationary_screen.yaml
+out_dir: runs/nonstationary_overnight
+train:
+  iterations: 18
+  group_size: 4
+nonstationary:
+  switch_iteration: 10
+  stationary_regime: inspection
+  feedback: generic
+  probe_every: 9
+  probe_tasks: 12
+  competence_min_success: 0.1
+  competence_min_successes: 2
+eval:
+  split: valid_unseen
+  max_tasks: 24

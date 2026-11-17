@@ -22,8 +22,13 @@ def main():
                         envs.clear()
                     if message["cmd"] == "reset":
                         from empg.envs.alfworld_env import ALFWorldEnv
+                        intervention = message.get("intervention")
                         for task in message["tasks"]:
-                            envs.append(ALFWorldEnv(task))
+                            env = ALFWorldEnv(task)
+                            if intervention:
+                                from empg.nonstationary import wrap_env
+                                env = wrap_env(env, intervention)
+                            envs.append(env)
                         result = [env.reset() for env in envs]
                     elif message["cmd"] == "step":
                         result = [envs[i].step(a) for i, a in message["actions"]]
