@@ -54,6 +54,8 @@ def candidates(cfg):
                                  micro_batch_tokens=2560, cuda_memory_fraction=.75,
                                  gradient_checkpointing=True, checkpoint_min_tokens=900,
                                  head_chunk_size=256, head_backend="analytic")),
+        ("native_selective2", replace(p, gradient_checkpointing=True, checkpoint_min_tokens=900)),
+        ("native_no_dedup", replace(p, deduplicate_responses=False)),
     ]
 
 
@@ -65,6 +67,8 @@ def profile(cfg, turns, samples, repeats, selected=None, memory_fraction=.75, ro
         # candidate should raise OOM rather than spill into slow shared RAM.
         torch.cuda.set_per_process_memory_fraction(memory_fraction)
     bench = make_benchmark(cfg.benchmark, **cfg.env)
+    if cfg.nonstationary.enabled:
+        bench.intervention = cfg.nonstationary.intervention(cfg.nonstationary.regime_at(1))
     policy = None
     try:
         available = bench.tasks("train")
@@ -73,6 +77,8 @@ def profile(cfg, turns, samples, repeats, selected=None, memory_fraction=.75, ro
         tasks = [available[i] for i in chosen for _ in range(cfg.train.group_size)]
         groups = [i for i in range(n_groups) for _ in range(cfg.train.group_size)]
         policy = LLMPolicy(cfg.policy, seed=cfg.seed)
+        if cfg.train.initial_adapter:
+            policy.load_adapter(cfg.train.initial_adapter)
         rollout = {}
         request = {"config": config_fingerprint(cfg), "turns": turns, "samples": samples,
                    "stress_max_length": stress_max_length}

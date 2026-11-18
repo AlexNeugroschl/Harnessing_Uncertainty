@@ -30,3 +30,17 @@ def test_timeout_stops_descendants(tmp_path):
     # An orphan may await init reaping briefly; a zombie cannot keep working.
     stat = Path(f"/proc/{pid}/stat")
     assert not stat.exists() or stat.read_text().split(") ", 1)[1].startswith("Z")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="GPU phases run in Linux/WSL")
+def test_outer_deadline_stops_nested_runner_with_separate_session(tmp_path):
+    pid_file = tmp_path / "nested.pid"
+    child = ("import os,sys,time; from pathlib import Path; "
+             "Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(60)")
+    nested = ("import sys; from benchmarks.process import run_process; "
+              f"run_process([sys.executable, '-c', {child!r}, sys.argv[1]], timeout=60)")
+    with pytest.raises(subprocess.TimeoutExpired):
+        run_process([sys.executable, "-c", nested, str(pid_file)], timeout=2)
+    pid = int(pid_file.read_text())
+    stat = Path(f"/proc/{pid}/stat")
+    assert not stat.exists() or stat.read_text().split(") ", 1)[1].startswith("Z")

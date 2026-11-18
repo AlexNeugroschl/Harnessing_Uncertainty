@@ -1,0 +1,16 @@
+# Confirmation candidate; first establish pre-change competence with the screen.
+inherit: novelgym_screen.yaml
+out_dir: runs/novelgym
+train:
+  iterations: 40
+  max_steps: 96
+nonstationary:
+  switch_iteration: 21
+  probe_every: 5
+  probe_tasks: 16
+advantage:
+  curiosity:
+    boost_updates: 6
+eval:
+  max_tasks: 64
+  max_steps: 96

@@ -58,6 +58,7 @@ class PolicyConfig:
     head_chunk_size: int = 128   # response tokens per exact vocabulary projection
     head_backend: str = "checkpoint"  # checkpoint (reference) | analytic (exact custom backward)
     head_checkpointing: bool = True
+    deduplicate_responses: bool = False  # exact shared scoring / weighted PPO rows; native research preset
     chunked_head: bool = True   # false: dense reference path for equivalence/profiling
     backend: str = "hf"          # generation engine: hf | vllm (scoring/training are always HF)
     merge_lora: bool = True      # hf: merge LoRA into the weights while generating
@@ -131,9 +132,10 @@ class LLMPolicy:
         self._sampling_calls = 0
 
     # ------------------------------------------------------------------ io
-    def encode_prompt(self, prompt: str) -> list[int]:
+    def encode_prompt(self, prompt: str | list[dict]) -> list[int]:
+        messages = prompt if isinstance(prompt, list) else [{"role": "user", "content": prompt}]
         text = self.tokenizer.apply_chat_template(
-            [{"role": "user", "content": prompt}], tokenize=False, add_generation_prompt=True)
+            messages, tokenize=False, add_generation_prompt=True)
         ids = self.tokenizer(text, add_special_tokens=False)["input_ids"]
         if self.cfg.max_prompt_tokens and len(ids) > self.cfg.max_prompt_tokens:
             raise ValueError(f"Prompt has {len(ids)} tokens, exceeding policy.max_prompt_tokens="
@@ -431,11 +433,20 @@ class LLMPolicy:
     @torch.no_grad()
     def score(self, prompt_ids, response_ids, with_entropy=True, reference=False):
         """No-grad chunked scoring. Returns lists of 1-D CPU tensors (one per sample)."""
+        if len(prompt_ids) != len(response_ids):
+            raise ValueError("scoring requires matching prompt/response counts")
         self.model.eval()
         logps, ents = [None] * len(prompt_ids), [None] * len(prompt_ids) if with_entropy else []
         mb = self.cfg.score_batch_size or self.cfg.micro_batch_size
         lengths = [len(p) + len(r) for p, r in zip(prompt_ids, response_ids)]
-        order = sorted(range(len(prompt_ids)), key=lambda i: lengths[i])
+        representatives, inverse, seen = [], [], {}
+        for i, (prompt, response) in enumerate(zip(prompt_ids, response_ids)):
+            key = (tuple(prompt), tuple(response)) if self.cfg.deduplicate_responses else i
+            if key not in seen:
+                seen[key] = i
+                representatives.append(i)
+            inverse.append(seen[key])
+        order = sorted(representatives, key=lambda i: lengths[i])
         ctx = self.model.disable_adapter() if (reference and self.use_lora) else _null()
         with ctx:
             for idx in token_microbatches(order, lengths, mb, self.cfg.micro_batch_tokens):
@@ -450,7 +461,9 @@ class LLMPolicy:
                     logps[idx[i]] = lp[i][mask[i]]
                     if with_entropy:
                         ents[idx[i]] = ent[i][mask[i]]
-        return logps, ents
+        # Return independent CPU tensors, preserving the existing score API.
+        return ([logps[i].clone() for i in inverse],
+                [ents[i].clone() for i in inverse] if with_entropy else [])
 
 
 def token_microbatches(order, lengths, max_sequences, max_tokens=0):

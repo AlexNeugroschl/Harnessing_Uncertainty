@@ -73,6 +73,16 @@ def test_score_matches_forward(policy):
     torch.testing.assert_close(ref[0], lp[0], atol=1e-4, rtol=0)
 
 
+def test_multiturn_chat_encoding_preserves_official_conversation_messages(policy):
+    pol, _ = policy
+    messages = [{"role": "system", "content": "Use tool JSON."},
+                {"role": "user", "content": "Current state"},
+                {"role": "assistant", "content": "previous action"},
+                {"role": "user", "content": "Result"}]
+    text = pol.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    assert pol.encode_prompt(messages) == pol.tokenizer(text, add_special_tokens=False)["input_ids"]
+
+
 def test_chunked_policy_matches_dense_with_unequal_lengths(policy):
     pol, _ = policy
     prompts = [pol.encode_prompt("hello"), pol.encode_prompt("a longer prompt about a door")]

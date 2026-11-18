@@ -1,0 +1,59 @@
+# Mechanism screen on the native engine, with the existing bounded 8 GiB update path.
+inherit: paper_optimized.yaml
+benchmark: novelgym
+out_dir: runs/novelgym_screen
+env:
+  recipe_depth: 4
+  novelty: tool
+  tasks_per_split: 64
+  suite_version: 3
+  upstream_revision: f5d06d4f5166ca985ca420c809129a79700d904e
+  workers: 0
+  memory: false
+  history_length: 2
+  action_parser: native
+policy:
+  max_new_tokens: 256
+  max_prompt_tokens: 1536
+  vllm_max_model_len: 1792
+  vllm_max_num_seqs: 16
+  gen_batch_size: 16
+  micro_batch_tokens: 2048
+  score_batch_size: 4
+  deduplicate_responses: true
+train:
+  iterations: 8
+  games_per_iter: 2
+  group_size: 8
+  max_steps: 48
+  save_every: 0
+  reward_source: environment
+  environment_reward_scale: 10.0
+advantage:
+  curiosity:
+    weight: 0.05
+    bonus: first_visit
+    boost_factor: 3.0
+    boost_updates: 3
+nonstationary:
+  enabled: true
+  change: rules
+  schedule: switch
+  switch_iteration: 5
+  initial_regime: baseline
+  final_regime: novelty
+  stationary_regime: novelty
+  feedback: generic
+  probe_every: 4
+  probe_tasks: 8
+  probe_split: valid_seen
+  probe_regimes: [baseline, novelty]
+  probe_seed: 0
+  eval_regime: novelty
+eval:
+  split: valid_unseen
+  max_tasks: 16
+  max_steps: 48
+  batch_envs: 16
+  selection: stratified
+  sampling_seed: 0

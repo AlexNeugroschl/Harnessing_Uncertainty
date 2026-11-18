@@ -120,3 +120,76 @@ def test_selective_checkpointing_preserves_gradients_without_adding_hooks():
         for a, b in zip(actual, expected):
             torch.testing.assert_close(a, b, atol=1e-6, rtol=1e-5)
         assert sum(len(module._forward_hooks) for module in policy.model.modules()) == hooks
+
+
+def test_duplicate_scores_preserve_values_order_and_independent_outputs():
+    policy = tiny_policy()
+    prompts = [[1, 2], [1], [1, 2], [1, 2]]
+    responses = [[3, 4], [5], [3, 4], [4, 3]]
+    expected = policy.score(prompts, responses)
+    policy.cfg.deduplicate_responses = True
+    actual = policy.score(prompts, responses)
+    for a, b in zip(actual[0] + actual[1], expected[0] + expected[1]):
+        torch.testing.assert_close(a, b, atol=1e-6, rtol=1e-6)
+    preserved = actual[0][2].clone()
+    actual[0][0].zero_()
+    torch.testing.assert_close(actual[0][2], preserved)
+    with pytest.raises(ValueError, match="matching"):
+        policy.score(prompts, responses[:1])
+
+
+@pytest.mark.parametrize("method", ["grpo", "empg"])
+def test_weighted_duplicate_rows_preserve_multi_epoch_updates_and_minibatch_boundaries(method):
+    policy = tiny_policy()
+    cfg = Config(policy=policy.cfg)
+    cfg.advantage.method = method
+    cfg.advantage.curiosity.weight = .05
+    cfg.train.kl_coef, cfg.train.entropy_coef = 0., .001
+    cfg.train.reward_mode, cfg.train.mini_batch_size = "step", 6
+    cfg.train.ppo_epochs, cfg.train.shuffle, cfg.train.dual_clip = 2, False, 3.
+    trajectories = []
+    for won in (True, False, True, False):
+        tr = Trajectory("t", 0, [Step([1, 2], [3, 4], "", "look", True),
+                                Step([1, 2], [5, 6], "", "look", True)],
+                        won=won, reward=10. * won, init_keys={"obs": "start"})
+        tr.steps[0].state_keys = {"obs": "new"}
+        tr.steps[1].state_keys = {"obs": "new"}
+        trajectories.append(tr)
+    initial = {k: v.detach().clone() for k, v in policy.model.state_dict().items()}
+    reference = update(policy, torch.optim.AdamW(policy.parameters(), lr=1e-4), trajectories, cfg, np.random.default_rng(0))
+    expected = {k: v.detach().clone() for k, v in policy.model.state_dict().items()}
+    policy.model.load_state_dict(initial)
+    policy.cfg.deduplicate_responses = True
+    actual = update(policy, torch.optim.AdamW(policy.parameters(), lr=1e-4), trajectories, cfg, np.random.default_rng(0))
+    assert actual["optimizer_steps"] == reference["optimizer_steps"] == 4
+    assert actual["unique_scored_steps"] == 2 and reference["unique_scored_steps"] == 8
+    assert actual["gradient_rows"] < reference["gradient_rows"]
+    for key, value in policy.model.state_dict().items():
+        torch.testing.assert_close(value, expected[key], atol=2e-6, rtol=1e-4)
+    for key in ("pg_loss", "kl", "entropy_mean", "adv_std", "clipfrac"):
+        assert actual[key] == pytest.approx(reference[key], abs=1e-5)
+
+
+@pytest.mark.parametrize("ratio", [.5, 1., 1.5, 5.])
+def test_duplicate_weighting_preserves_clipping_kl_entropy_and_gradients(ratio):
+    from empg.loss import policy_loss
+    from empg.trainer import collapse_update_rows
+    parameter = torch.tensor([[0., -.5], [-1., -.2]], requires_grad=True)
+    mapping = torch.tensor([0, 0, 0, 1])
+    advantages = np.array([1., -1., 1., .5])
+    old = parameter.detach() - np.log(ratio)
+    ref = parameter.detach() + .1
+    full, expected_stats = policy_loss(parameter[mapping], old[mapping], ref[mapping],
+        torch.tensor(advantages)[:, None].expand(-1, 2), torch.ones(4, 2), dual_clip=3.,
+        entropy=parameter[mapping].exp(), entropy_coef=.01, tensor_stats=True)
+    expected = torch.autograd.grad(full, parameter, retain_graph=True)[0]
+    rows, counts = collapse_update_rows(np.arange(4), ["a", "a", "a", "b"], advantages)
+    ix = mapping[rows]
+    weighted, stats = policy_loss(parameter[ix], old[ix], ref[ix],
+        torch.tensor(advantages[rows])[:, None].expand(-1, 2),
+        torch.tensor([counts[i] for i in rows])[:, None].expand(-1, 2), dual_clip=3.,
+        entropy=parameter[ix].exp(), entropy_coef=.01, tensor_stats=True)
+    torch.testing.assert_close(weighted, full)
+    torch.testing.assert_close(torch.autograd.grad(weighted, parameter)[0], expected)
+    for key in stats:
+        torch.testing.assert_close(stats[key], expected_stats[key])

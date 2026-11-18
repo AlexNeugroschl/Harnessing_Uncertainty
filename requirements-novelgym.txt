@@ -1,0 +1,2 @@
+# Optional native environment, pinned to the reviewed upstream revision.
+NovelGridWorlds @ git+https://github.com/tufts-ai-robotics-group/NovelGridWorldsV2.git@f5d06d4f5166ca985ca420c809129a79700d904e

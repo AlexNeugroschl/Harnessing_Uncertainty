@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+from functools import lru_cache
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -21,6 +22,8 @@ from empg.nonstationary import NonstationaryConfig
 
 @dataclass
 class TrainConfig:
+    initial_adapter: str = ""    # optional common pre-change competence checkpoint
+    initial_adapter_sha256: str = ""
     iterations: int = 100
     games_per_iter: int = 4      # distinct tasks per iteration
     group_size: int = 8          # rollouts per task (GRPO group)
@@ -81,22 +84,29 @@ class Config:
 def _optional_defaults(data: dict) -> dict:
     """Keep legacy artifact fingerprints valid when new options are disabled."""
     result = dict(data)
+    if "advantage" in result and "curiosity" in result["advantage"]:
+        result["advantage"] = dict(result["advantage"])
+        cur = dict(result["advantage"]["curiosity"])
+        if cur.get("boost", "none") == "none":
+            for key in ("boost", "boost_factor", "boost_updates", "failure_threshold", "failure_ema", "detector_warmup"):
+                cur.pop(key, None)
+        result["advantage"]["curiosity"] = cur
     if not result.get("nonstationary", {}).get("enabled", False):
         result.pop("nonstationary", None)
     elif "nonstationary" in result:
         result["nonstationary"] = dict(result["nonstationary"])
         for key, default in {"feedback": "explicit", "competence_min_success": .1,
-                             "competence_min_successes": 2}.items():
+                             "competence_min_successes": 2, "switch_iterations": []}.items():
             if result["nonstationary"].get(key) == default:
                 result["nonstationary"].pop(key, None)
     for section, defaults in {
         "train": {"entropy_coef": 0.0, "reward_mode": "trajectory", "mini_batch_size": 0,
                   "shuffle": True, "dual_clip": 0.0, "reward_source": "success",
-                  "environment_reward_scale": 1.0},
+                  "environment_reward_scale": 1.0, "initial_adapter": "", "initial_adapter_sha256": ""},
         "policy": {"amp": False, "vllm_max_num_seqs": 256, "max_prompt_tokens": 0,
                    "checkpoint_min_tokens": 0,
                    "score_batch_size": 0, "micro_batch_tokens": 0, "cuda_memory_fraction": 0.0,
-                   "head_backend": "checkpoint", "head_checkpointing": True},
+                   "head_backend": "checkpoint", "head_checkpointing": True, "deduplicate_responses": False},
         "eval": {"temperature": None, "sampling_seed": None},
         "advantage": {"entropy_eps": 1e-6, "scale_eps": 0.0},
     }.items():
@@ -163,6 +173,33 @@ def load_config(path: str | None = None, overrides: list[str] | None = None,
         node[leaf] = yaml.safe_load(val)
     cfg = _build(Config, data)
     cfg.nonstationary.validate(cfg.train.iterations)
+    cfg.advantage.curiosity.validate()
+    if cfg.train.initial_adapter:
+        observed = adapter_fingerprint(cfg.train.initial_adapter)
+        if cfg.train.initial_adapter_sha256 and cfg.train.initial_adapter_sha256 != observed:
+            raise ValueError("initial adapter contents differ from the recorded fingerprint")
+        cfg.train.initial_adapter_sha256 = observed
     if cfg.train.reward_source not in ("success", "environment"):
         raise ValueError("train.reward_source must be success or environment")
     return cfg
+
+
+def adapter_fingerprint(directory):
+    directory = Path(directory)
+    files = [directory / "adapter_config.json", *sorted(directory.glob("adapter_model.*"))]
+    if len(files) < 2 or not all(p.is_file() for p in files):
+        raise ValueError(f"not a saved LoRA adapter: {directory}")
+    signature = tuple((str(p.resolve()), p.stat().st_size, p.stat().st_mtime_ns, p.stat().st_ctime_ns) for p in files)
+    return _adapter_contents_fingerprint(signature)
+
+
+@lru_cache(maxsize=128)
+def _adapter_contents_fingerprint(signature):
+    digest = hashlib.sha256()
+    for filename, *_ in signature:
+        path = Path(filename)
+        digest.update(path.name.encode())
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()

@@ -55,6 +55,23 @@ def summarize(rows, probes, nc):
     Recovery uses the latest pre-switch old-regime held-out success as its
     reference. It is first observed threshold crossing, not a convergence claim.
     """
+    if nc.schedule == "recurring":
+        events = []
+        points = nc.change_points()
+        for index, point in enumerate(points):
+            end = points[index + 1] if index + 1 < len(points) else float("inf")
+            event = dataclasses.replace(nc, schedule="switch", switch_iteration=point, switch_iterations=[],
+                        initial_regime=nc.regime_at(point - 1), final_regime=nc.regime_at(point))
+            events.append(summarize([r for r in rows if r["iteration"] < end],
+                                    [p for p in probes if p["iteration"] < end], event))
+        return {"schedule": "recurring", "change": nc.change, "events": events,
+                "switch_iteration": nc.switch_iteration, "completed_iterations": rows[-1]["iteration"] if rows else 0,
+                "shift_observed": any(e["shift_observed"] for e in events),
+                "post_boundary_episodes": sum(r.get("episodes", 0) for r in rows if r["iteration"] >= nc.switch_iteration),
+                "post_boundary_env_return": sum(r.get("env_return_sum", 0) for r in rows if r["iteration"] >= nc.switch_iteration),
+                "recovery_updates": None,
+                "adaptation_interpretable": bool(events) and all(e["adaptation_interpretable"] for e in events),
+                "competence_status": "see per-change events", "probe_count": len(probes)}
     post = [r for r in rows if r["iteration"] >= nc.switch_iteration]
     result = {"schedule": nc.schedule, "change": nc.change,
               "switch_iteration": nc.switch_iteration,
@@ -75,6 +92,10 @@ def summarize(rows, probes, nc):
     if not before:
         return result
     reference = max(before, key=lambda p: p["iteration"])
+    counterfactual = [p for p in probes if p["iteration"] == reference["iteration"] and p["regime"] == nc.final_regime]
+    if counterfactual:
+        result["immediate_shift_success"] = counterfactual[-1]["all"]
+        result["immediate_shift_drop"] = reference["all"] - counterfactual[-1]["all"]
     result["pre_shift_success"] = reference["all"]
     successes = sum(bool(r["won"]) for r in reference["per_task"]) if "per_task" in reference else None
     result["pre_shift_successes"] = successes

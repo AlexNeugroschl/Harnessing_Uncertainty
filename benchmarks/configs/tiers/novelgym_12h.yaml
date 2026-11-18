@@ -1,0 +1,20 @@
+# The 12-hour runner resolves an identical update count from native calibration.
+inherit: novelgym_screen.yaml
+out_dir: runs/nonstationary/12h
+env:
+  recipe_depth: 8
+train:
+  iterations: 40
+  max_steps: 72
+nonstationary:
+  switch_iteration: 21
+  probe_every: 10
+  probe_tasks: 12
+  competence_min_success: 0.5
+  competence_min_successes: 4
+advantage:
+  curiosity:
+    boost_updates: 10
+eval:
+  max_tasks: 32
+  max_steps: 72

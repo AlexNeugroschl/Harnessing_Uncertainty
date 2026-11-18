@@ -18,10 +18,12 @@ from benchmarks.common import add_args, load
 
 
 def environment_profile(cfg, tasks, turns, workers):
-    from empg.envs.alfworld_env import ALFWorldBenchmark
+    from empg.envs.base import make_benchmark
     records, expected = [], None
     for n_workers in workers:
-        bench = ALFWorldBenchmark(**{**cfg.env, "workers": n_workers})
+        bench = make_benchmark(cfg.benchmark, **{**cfg.env, "workers": n_workers})
+        if cfg.nonstationary.enabled:
+            bench.intervention = cfg.nonstationary.intervention(cfg.nonstationary.regime_at(1))
         try:
             # Include first-use imports; reuse the worker pool for the warm repeat.
             for repeat in range(2):
@@ -70,6 +72,8 @@ def update_profile(cfg, tasks, turns, repeats=1, compare_dense=False):
     seed_everything(cfg.seed)
     policy = LLMPolicy(cfg.policy, seed=cfg.seed)
     try:
+        if cfg.train.initial_adapter:
+            policy.load_adapter(cfg.train.initial_adapter)
         return _measure_updates(policy, cfg, tasks, turns, repeats, compare_dense)
     finally:
         policy.close()
@@ -82,6 +86,8 @@ def _measure_updates(policy, cfg, tasks, turns, repeats, compare_dense):
     from empg.trainer import update
 
     bench = make_benchmark(cfg.benchmark, **cfg.env)
+    if cfg.nonstationary.enabled:
+        bench.intervention = cfg.nonstationary.intervention(cfg.nonstationary.regime_at(1))
     try:
         times = {}
         groups = [i // cfg.train.group_size for i in range(len(tasks))]
@@ -132,6 +138,8 @@ def _measure_updates(policy, cfg, tasks, turns, repeats, compare_dense):
     max_delta = (max((a - b).abs().max().item() for a, b in zip(*result_weights))
                  if compare_dense else None)
     return {"rollout": times, "updates": records, "adapter_max_abs_delta": max_delta,
+            "response_samples": [{"text": s.text, "valid": s.valid, "truncated": s.truncated}
+                                 for tr in trajs[:2] for s in tr.steps[:5]],
             "max_prompt_tokens_observed": max(len(s.prompt_ids) for tr in trajs for s in tr.steps),
             "max_response_tokens_observed": max(len(s.response_ids) for tr in trajs for s in tr.steps),
             "note": ("Mixed rewards injected for gradient equivalence; not research evidence."
@@ -155,8 +163,8 @@ def main():
     if args.samples < 2 or args.turns < 1 or args.repeats < 1:
         ap.error("samples must be >=2; turns/repeats must be >=1")
     cfg = load(args.config, args.tier, args.overrides, args.seed)
-    if cfg.benchmark != "alfworld":
-        ap.error("this profiler currently supports ALFWorld only")
+    if cfg.benchmark == "novelgym":
+        args.workers = [0]
     from empg.envs.base import make_benchmark
     bench = make_benchmark(cfg.benchmark, **cfg.env)
     available = bench.tasks("train")

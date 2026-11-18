@@ -11,8 +11,8 @@ import numpy as np
 import torch
 
 from empg.advantages import compute_advantages, normalize_entropy
-from empg.config import Config, config_dict, config_fingerprint, config_matches
-from empg.curiosity import exploration_stats, intrinsic_rewards
+from empg.config import Config, adapter_fingerprint, config_dict, config_fingerprint, config_matches
+from empg.curiosity import CuriosityController, exploration_stats, intrinsic_rewards, schedule_multiplier
 from empg.envs.base import make_benchmark
 from empg.loss import policy_loss
 from empg.policy import LLMPolicy, token_microbatches
@@ -39,6 +39,24 @@ def optimizer_minibatches(n_steps, tc, rng):
     return [mb for mb in np.array_split(order, tc.mini_batches) if len(mb)]
 
 
+def collapse_update_rows(indices, response_keys, advantages):
+    """Merge only identical conditional responses AND identical advantages.
+
+    PPO clipping depends on the advantage sign, so averaging opposite-sign
+    advantages would change the objective. Keeping their exact values separate
+    preserves every token's loss, KL/entropy weight, and optimizer minibatch.
+    """
+    representatives, multiplicities, seen = [], {}, {}
+    for index in indices:
+        key = (response_keys[index], float(advantages[index]))
+        if key not in seen:
+            seen[key] = index
+            representatives.append(index)
+            multiplicities[index] = 0
+        multiplicities[seen[key]] += 1
+    return np.asarray(representatives), multiplicities
+
+
 # Exploration metrics always use the non-privileged key, so every arm is measured
 # the same way whatever key its curiosity bonus uses. Envs without state keys
 # fall back to the observation text.
@@ -56,7 +74,7 @@ def _close_policy_on_error(policy):
 
 
 def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
-           rng: np.random.Generator, iteration: int = 1) -> dict:
+           rng: np.random.Generator, iteration: int = 1, curiosity_multiplier: float = 1.0) -> dict:
     """One policy-gradient update on a batch of trajectories. Returns stats."""
     tc = cfg.train
     if policy.cfg.temperature != 1.0 or policy.cfg.top_p != 1.0:
@@ -71,6 +89,7 @@ def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
     P = [s.prompt_ids for s in steps]
     R = [s.response_ids for s in steps]
     lengths = [len(p) + len(r) for p, r in zip(P, R)]
+    response_keys = [(tuple(p), tuple(r)) for p, r in zip(P, R)]
 
     # Step entropy H_t (Eq. 7): mean full-vocab token entropy over the response.
     t_score = time.perf_counter()
@@ -98,7 +117,8 @@ def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
     if cur.weight != 0:
         intrinsic = intrinsic_rewards(
             [tr.key_seq(cur.key) for tr in trajs], groups, won, cur, iteration,
-            tc.iterations, h_norm=normalize_entropy(step_h, cfg.advantage.entropy_eps))
+            tc.iterations, h_norm=normalize_entropy(step_h, cfg.advantage.entropy_eps),
+            multiplier=curiosity_multiplier)
     adv = compute_advantages([tr.reward for tr in trajs], groups, step_traj, step_h,
                              cfg.advantage, intrinsic=intrinsic, step_rewards=step_rewards)
 
@@ -111,12 +131,17 @@ def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
     dev, mb_size = policy.device, policy.cfg.micro_batch_size
     sums = {"pg": 0.0, "kl": 0.0, "clipfrac": 0.0, "tokens": 0}
     grad_norms = []
+    gradient_rows = 0
     for _ in range(tc.ppo_epochs):
         for mb in optimizer_minibatches(len(steps), tc, rng):
             n_tok = sum(len(R[i]) for i in mb)
             # Keep random minibatch membership and token-mean weighting, while
             # reducing padding inside its gradient-accumulation microbatches.
             mb = np.array(sorted(mb, key=lambda i: lengths[i]))
+            counts = None
+            if cfg.policy.deduplicate_responses:
+                mb, counts = collapse_update_rows(mb, response_keys, adv)
+            gradient_rows += len(mb)
             opt.zero_grad(set_to_none=True)
             for idx in token_microbatches(mb, lengths, mb_size, policy.cfg.micro_batch_tokens):
                 logp, entropy, mask = policy.forward_logprobs(
@@ -125,7 +150,9 @@ def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
                 old = _right_aligned([old_logp[i] for i in idx], T, dev)
                 ref = _right_aligned([ref_logp[i] for i in idx], T, dev) if ref_logp else None
                 a = torch.tensor(adv[idx], dtype=torch.float32, device=dev)[:, None].expand(-1, T)
-                loss, st = policy_loss(logp, old, ref, a, mask, tc.clip_low, tc.clip_high,
+                weights = (mask.float() * torch.tensor([counts[i] for i in idx], device=dev)[:, None]
+                           if counts is not None else mask)
+                loss, st = policy_loss(logp, old, ref, a, weights, tc.clip_low, tc.clip_high,
                                        tc.kl_coef, tensor_stats=True, entropy=entropy,
                                        entropy_coef=tc.entropy_coef, dual_clip=tc.dual_clip)
                 (loss / n_tok).backward()
@@ -166,6 +193,12 @@ def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
         "t_score": score_seconds,
         **explore,
         "intrinsic_share": share,  # mean |A_with_curiosity - A_without| / mean |A_with|
+        "curiosity_multiplier": curiosity_multiplier,
+        "curiosity_weight": cur.weight * schedule_multiplier(cur, iteration, tc.iterations) * curiosity_multiplier,
+        "intrinsic_mean": float(intrinsic.mean()) if intrinsic is not None else 0.,
+        "intrinsic_effective_abs": float(np.abs(effective_intrinsic).mean()),
+        **({"action_failure_rate": sum(tr.intervention_metrics.get("action_failures", 0) for tr in trajs) / len(steps)}
+           if any("action_failures" in tr.intervention_metrics for tr in trajs) else {}),
         "success": float(np.mean([tr.won for tr in trajs])),
         "reward": float(scores.mean()),
         "ep_len": float(np.mean([len(tr.steps) for tr in trajs])),
@@ -180,6 +213,9 @@ def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
         "grad_norm": float(np.mean(grad_norms)) if grad_norms else 0.0,
         "n_steps": len(steps),
         "optimizer_steps": len(grad_norms),
+        "unique_scored_steps": len(set(response_keys)) if cfg.policy.deduplicate_responses else len(steps),
+        "gradient_rows": gradient_rows,
+        "response_deduplication": cfg.policy.deduplicate_responses,
     }
 
 
@@ -205,6 +241,12 @@ def train(cfg: Config, log=print) -> LLMPolicy:
     tc = cfg.train
     nc = cfg.nonstationary
     nc.validate(tc.iterations)
+    cfg.advantage.curiosity.validate()
+    if tc.initial_adapter and adapter_fingerprint(tc.initial_adapter) != tc.initial_adapter_sha256:
+        raise ValueError("initial adapter changed after experiment configuration")
+    controller = CuriosityController(cfg.advantage.curiosity)
+    if cfg.advantage.curiosity.boost == "observed_failure" and cfg.benchmark != "novelgym":
+        raise ValueError("observed_failure currently requires the NovelGym observable feedback adapter")
     if tc.reward_source not in ("success", "environment") or not np.isfinite(tc.environment_reward_scale):
         raise ValueError("invalid train.reward_source/environment_reward_scale")
     if min(tc.iterations, tc.games_per_iter, tc.max_steps, tc.mini_batches, tc.ppo_epochs) < 1:
@@ -249,6 +291,12 @@ def train(cfg: Config, log=print) -> LLMPolicy:
         from benchmarks.evaluate import select_tasks
         select_tasks(bench.tasks(nc.probe_split), bench, nc.probe_eval_config(cfg.eval))
     policy = LLMPolicy(cfg.policy, seed=cfg.seed)
+    if tc.initial_adapter:
+        try:
+            policy.load_adapter(tc.initial_adapter)
+        except BaseException:
+            policy.close()
+            raise
     opt = torch.optim.AdamW(policy.parameters(), lr=cfg.train.lr,
                             weight_decay=cfg.train.weight_decay)
     tc = cfg.train
@@ -291,7 +339,10 @@ def train(cfg: Config, log=print) -> LLMPolicy:
                                      f"  rollout turn {turn}/{tc.max_steps}, {active} active"))
             t1 = time.time()
             log(f"  scoring and updating batch {it}/{tc.iterations}")
-            stats = update(policy, opt, trajs, cfg, rng, iteration=it)
+            multiplier = controller.multiplier(it, nc)
+            stats = update(policy, opt, trajs, cfg, rng, iteration=it, curiosity_multiplier=multiplier)
+            controller.observe(it, stats.get("action_failure_rate"))
+            stats["curiosity_detector_triggered"] = controller.triggered
             stats.update(iteration=it, t_rollout=t1 - t0, t_update=time.time() - t1,
                          **rollout_times, **gpu_memory_check(log))
             cumulative_steps += sum(len(tr.steps) for tr in trajs)

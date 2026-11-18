@@ -92,11 +92,13 @@ def test_new_options_do_not_invalidate_disabled_legacy_configurations():
     cfg = load("grpo", "overnight_full")
     legacy = dataclasses.asdict(cfg)
     legacy.pop("nonstationary")
+    for key in ("boost", "boost_factor", "boost_updates", "failure_threshold", "failure_ema", "detector_warmup"):
+        legacy["advantage"]["curiosity"].pop(key)
     for section, keys in {"train": ["entropy_coef", "reward_mode", "mini_batch_size", "shuffle", "dual_clip",
-                                      "reward_source", "environment_reward_scale"],
+                                      "reward_source", "environment_reward_scale", "initial_adapter", "initial_adapter_sha256"],
                           "policy": ["amp", "vllm_max_num_seqs", "max_prompt_tokens",
                                      "score_batch_size", "micro_batch_tokens", "cuda_memory_fraction",
-                                     "head_backend", "head_checkpointing", "checkpoint_min_tokens"],
+                                     "head_backend", "head_checkpointing", "checkpoint_min_tokens", "deduplicate_responses"],
                           "eval": ["temperature", "sampling_seed"],
                           "advantage": ["entropy_eps", "scale_eps"]}.items():
         for key in keys:

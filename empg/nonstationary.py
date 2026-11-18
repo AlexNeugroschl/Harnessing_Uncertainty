@@ -9,7 +9,7 @@ import hashlib
 import re
 
 
-REGIMES = ("baseline", "inspection")
+REGIMES = ("baseline", "inspection", "novelty")
 _TARGETS = {
     "take": re.compile(r"^take .+ from (.+)$"),
     "open": re.compile(r"^open (.+)$"),
@@ -25,6 +25,7 @@ class NonstationaryConfig:
     change: str = "rules"                 # rules | rewards
     schedule: str = "switch"              # switch | stationary
     switch_iteration: int = 11            # first batch in final regime
+    switch_iterations: list[int] = field(default_factory=list)  # recurring toggles; empty = one switch
     initial_regime: str = "baseline"
     final_regime: str = "inspection"
     stationary_regime: str = "baseline"
@@ -34,7 +35,7 @@ class NonstationaryConfig:
     probe_every: int = 0                  # 0 disables ALL intermediate evaluation
     probe_tasks: int = 12                 # fixed panel; 0 = entire split
     probe_split: str = "valid_seen"
-    probe_regimes: list[str] = field(default_factory=lambda: list(REGIMES))
+    probe_regimes: list[str] = field(default_factory=lambda: ["baseline", "inspection"])
     probe_seed: int = 0
     eval_regime: str = "final"            # final | baseline | inspection
     recovery_fraction: float = 0.9
@@ -47,7 +48,7 @@ class NonstationaryConfig:
         counts = (self.switch_iteration, self.probe_every, self.probe_tasks, self.probe_seed)
         if any(not isinstance(v, int) or isinstance(v, bool) for v in counts):
             raise ValueError("nonstationary iteration, probe counts and seed must be integers")
-        if self.change not in ("rules", "rewards") or self.schedule not in ("switch", "stationary"):
+        if self.change not in ("rules", "rewards") or self.schedule not in ("switch", "stationary", "recurring"):
             raise ValueError("nonstationary change must be rules/rewards; schedule must be switch/stationary")
         if self.feedback not in ("explicit", "generic"):
             raise ValueError("nonstationary.feedback must be explicit or generic")
@@ -57,11 +58,21 @@ class NonstationaryConfig:
             raise ValueError("invalid nonstationary.eval_regime")
         if not self.actions or len(set(self.actions)) != len(self.actions) or any(a not in _TARGETS for a in self.actions):
             raise ValueError("nonstationary.actions must be unique supported action verbs")
-        if self.schedule == "switch" and (self.switch_iteration < 2 or
+        if self.schedule in ("switch", "recurring") and (self.switch_iteration < 2 or
                 (iterations is not None and self.switch_iteration > iterations)):
             raise ValueError("nonstationary.switch_iteration must lie in [2, train.iterations]")
-        if self.schedule == "switch" and self.initial_regime == self.final_regime:
+        if self.schedule in ("switch", "recurring") and self.initial_regime == self.final_regime:
             raise ValueError("a switch requires different initial/final regimes; use stationary instead")
+        if self.switch_iterations:
+            if (any(not isinstance(i, int) or isinstance(i, bool) or i < 2 or
+                    (iterations is not None and i > iterations) for i in self.switch_iterations)
+                    or self.switch_iterations != sorted(set(self.switch_iterations))
+                    or self.switch_iterations[0] != self.switch_iteration):
+                raise ValueError("switch_iterations must be sorted unique boundaries starting at switch_iteration")
+            if self.schedule == "switch" and len(self.switch_iterations) > 1:
+                raise ValueError("multiple boundaries require schedule=recurring or a stationary clock control")
+        if self.schedule == "recurring" and len(self.switch_iterations) < 2:
+            raise ValueError("recurring requires at least two switch_iterations")
         if self.probe_every < 0 or self.probe_tasks < 0 or self.probe_seed < 0:
             raise ValueError("nonstationary probe counts/seed must be nonnegative")
         if self.probe_split not in ("valid_seen", "valid_unseen"):
@@ -77,11 +88,17 @@ class NonstationaryConfig:
     def regime_at(self, iteration):
         if self.schedule == "stationary":
             return self.stationary_regime
-        return self.initial_regime if iteration < self.switch_iteration else self.final_regime
+        changes = sum(iteration >= p for p in self.change_points())
+        return self.final_regime if changes % 2 else self.initial_regime
+
+    def change_points(self):
+        return self.switch_iterations or [self.switch_iteration]
 
     def evaluation_regime(self):
         if self.eval_regime != "final":
             return self.eval_regime
+        if self.schedule == "recurring":
+            return self.final_regime if len(self.change_points()) % 2 else self.initial_regime
         return self.stationary_regime if self.schedule == "stationary" else self.final_regime
 
     def intervention(self, regime):
@@ -98,7 +115,7 @@ class NonstationaryConfig:
             return []
         points = {0, iterations, *range(self.probe_every, iterations + 1, self.probe_every)}
         # Include identical boundary probes for stationary controls, too.
-        points.update(i for i in (self.switch_iteration - 1, self.switch_iteration) if 0 <= i <= iterations)
+        points.update(i for p in self.change_points() for i in (p - 1, p) if 0 <= i <= iterations)
         return sorted(points)
 
     def probe_eval_config(self, ec):
@@ -116,6 +133,8 @@ class InspectionEnv:
     """
 
     def __init__(self, env, *, change, regime, actions, consume_inspection=False, feedback="explicit"):
+        if regime not in ("baseline", "inspection"):
+            raise ValueError("ALFWorld inspection wrapper requires baseline/inspection regimes")
         self.env, self.change, self.regime = env, change, regime
         self.patterns = {a: _TARGETS[a] for a in actions}
         self.consume = consume_inspection

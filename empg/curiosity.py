@@ -35,6 +35,74 @@ class CuriosityConfig:
     gate: str = "none"           # none | no_success_signal (only groups whose rollouts all share one outcome)
     modulate: str = "none"       # none | confident (x (1 - H_norm_t)) | uncertain (x H_norm_t)
     cap: float = 0.0             # max summed bonus per episode (0 = no cap)
+    boost: str = "none"         # none | oracle_window | clock_window | observed_failure
+    boost_factor: float = 3.0
+    boost_updates: int = 4
+    failure_threshold: float = 0.15  # increase over prior EMA, not absolute failure rate
+    failure_ema: float = 0.2
+    detector_warmup: int = 2
+
+    def validate(self):
+        if self.boost not in ("none", "oracle_window", "clock_window", "observed_failure"):
+            raise ValueError("unknown curiosity boost")
+        if not np.isfinite(self.weight) or self.weight < 0:
+            raise ValueError("curiosity weight must be finite and nonnegative")
+        if not np.isfinite(self.boost_factor) or self.boost_factor < 1:
+            raise ValueError("curiosity boost_factor must be finite and >= 1")
+        if any(not isinstance(v, int) or isinstance(v, bool) or v < 1
+               for v in (self.boost_updates, self.detector_warmup)):
+            raise ValueError("curiosity boost_updates/detector_warmup must be positive integers")
+        if not 0 < self.failure_ema <= 1 or not 0 < self.failure_threshold <= 1:
+            raise ValueError("invalid curiosity failure detector parameters")
+
+
+class CuriosityController:
+    """One scalar per update; observed detection uses completed batches only.
+
+    Oracle timing is experimental privileged information. It never enters an
+    observation, action set, state key, or the observable detector.
+    """
+
+    def __init__(self, cfg):
+        cfg.validate()
+        self.cfg = cfg
+        self.ema = None
+        self.seen = 0
+        self.until = 0
+        self.start = 0
+        self.triggered = False
+
+    def multiplier(self, iteration, nonstationary):
+        c = self.cfg
+        if c.boost == "none":
+            return 1.0
+        if c.boost in ("oracle_window", "clock_window"):
+            if not nonstationary.enabled:
+                return 1.0
+            if c.boost == "oracle_window" and nonstationary.schedule == "stationary":
+                return 1.0
+            points = nonstationary.change_points()
+            active = any(p <= iteration < p + c.boost_updates for p in points)
+        else:
+            active = self.start <= iteration <= self.until
+        return c.boost_factor if active else 1.0
+
+    def observe(self, iteration, failure_rate):
+        self.triggered = False
+        if self.cfg.boost != "observed_failure":
+            return
+        if failure_rate is None or not np.isfinite(failure_rate):
+            raise ValueError("observed_failure boost requires observable action failure feedback")
+        if (self.ema is not None and self.seen >= self.cfg.detector_warmup
+                and iteration > self.until
+                and failure_rate - self.ema >= self.cfg.failure_threshold):
+            # The next update is the first affected one; no hindsight weighting.
+            self.until = iteration + self.cfg.boost_updates
+            self.start = iteration + 1
+            self.triggered = True
+        alpha = self.cfg.failure_ema
+        self.ema = failure_rate if self.ema is None else (1 - alpha) * self.ema + alpha * failure_rate
+        self.seen += 1
 
 
 def episodic_counts(seqs: list[list[str]]) -> list[np.ndarray]:
@@ -100,7 +168,7 @@ def no_success_signal(groups, won) -> np.ndarray:
 
 
 def intrinsic_rewards(seqs, groups, won, cfg: CuriosityConfig, iteration: int = 1,
-                      total_iters: int = 1, h_norm=None) -> np.ndarray:
+                      total_iters: int = 1, h_norm=None, multiplier: float = 1.0) -> np.ndarray:
     """Weighted per-step curiosity term eta_k * c_t, flat over the batch."""
     if cfg.scope == "episodic":
         counts = episodic_counts(seqs)
@@ -122,7 +190,9 @@ def intrinsic_rewards(seqs, groups, won, cfg: CuriosityConfig, iteration: int = 
             raise ValueError("modulate needs h_norm")
         h = np.asarray(h_norm, dtype=np.float64)
         c = c * ((1.0 - h) if cfg.modulate == "confident" else h)
-    return cfg.weight * schedule_multiplier(cfg, iteration, total_iters) * c
+    if not np.isfinite(multiplier) or multiplier < 0:
+        raise ValueError("curiosity multiplier must be finite and nonnegative")
+    return cfg.weight * schedule_multiplier(cfg, iteration, total_iters) * multiplier * c
 
 
 def exploration_stats(seqs, groups, won) -> dict:

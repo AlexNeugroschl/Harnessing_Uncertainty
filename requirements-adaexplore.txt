@@ -1,0 +1,5 @@
+# Optional complementary official runtime. The local evaluator does not use cloud clients.
+httpx>=0.27
+jsonschema>=4.23
+jinja2>=3.1
+z3-solver>=4.13,<5

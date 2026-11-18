@@ -1,5 +1,8 @@
 # Curiosity when environment rules or rewards change
 
+The main research suite has moved to [native non-stationary crafting](nonstationary_research.md).
+This ALFWorld inspection experiment remains available as a secondary continuity check.
+
 The research question is whether intrinsic motivation helps LLM agents discover
 successful long-horizon behavior after their previous strategy stops working.
 GRPO without curiosity is the main outcome-reward control. EMPG is an optional

@@ -58,6 +58,9 @@ def evaluation_protocol(cfg: Config, regime=None) -> dict:
                 "max_new_tokens": cfg.policy.max_new_tokens,
                 "selection": ec.selection, "selection_seed": ec.selection_seed,
                 "history_length": cfg.env.get("history_length", 2)}
+    if cfg.benchmark != "alfworld":
+        protocol.update(benchmark=cfg.benchmark, environment={k: v for k, v in cfg.env.items()
+                        if k not in ("workers", "history_length", "action_parser")})
     if not ec.greedy and ec.temperature is not None:
         protocol["temperature"] = ec.temperature
     if cfg.env.get("action_parser", "strict") != "strict":
@@ -122,6 +125,10 @@ def evaluate(policy: LLMPolicy, cfg: Config, log=print, *, regime=None, benchmar
                 by_type[bench.task_type(tr.task)].append(tr.won)
                 per_task.append({"task": tr.task, "type": bench.task_type(tr.task),
                                  "won": tr.won, "steps": len(tr.steps), "invalid": tr.n_invalid})
+                if cfg.benchmark == "novelgym" and len(per_task) <= 2:
+                    per_task[-1]["trace"] = [{"action": step.action, "response": step.text,
+                                             "feedback": step.obs, "valid": step.valid}
+                                            for step in tr.steps[:16]]
                 if nc.enabled or cfg.train.reward_source == "environment":
                     per_task[-1].update(env_return=tr.env_return, **tr.intervention_metrics)
             for k, v in response_lengths(trajs).items():
@@ -170,7 +177,9 @@ def main():
     seed_everything(cfg.seed)
     policy = LLMPolicy(cfg.policy, seed=cfg.seed)
     try:
-        if not args.base:
+        if args.base and cfg.train.initial_adapter:
+            policy.load_adapter(cfg.train.initial_adapter)
+        elif not args.base:
             policy.load_adapter(str(cfg.run_dir / "adapter"))
         save_evaluation(policy, cfg, args.base)
     finally:

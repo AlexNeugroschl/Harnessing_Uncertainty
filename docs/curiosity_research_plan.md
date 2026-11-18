@@ -1,5 +1,9 @@
 # Research plan: curiosity for long-horizon, sparse-reward LLM agents
 
+The active research protocol is now [non-stationary adaptation](nonstationary_research.md),
+using native NovelGridWorldsV2 crafting tasks and curiosity dose/timing controls.
+This document records the earlier ALFWorld exploration plan and implementation history.
+
 The October 11, 2026 [research audit](research_audit.md) narrows the theoretical claims, repairs the task-sampling
 control, and adds paired evaluation plus a cheaper staged protocol. Use `pilot` on `valid_seen` for development;
 reserve `valid_unseen` for a prespecified confirmation. Earlier timing estimates below predate the optimizations.

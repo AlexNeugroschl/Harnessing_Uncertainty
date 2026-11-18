@@ -43,6 +43,9 @@ class Benchmark(Protocol):
 
 
 def make_benchmark(name: str, **kwargs) -> Benchmark:
+    if name == "novelgym":
+        from empg.envs.novelgym_env import NovelGymBenchmark
+        return NovelGymBenchmark(**kwargs)
     if name == "alfworld":
         from empg.envs.alfworld_env import ALFWorldBenchmark
         return ALFWorldBenchmark(**kwargs)
