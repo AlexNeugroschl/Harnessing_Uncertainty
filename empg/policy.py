@@ -20,6 +20,7 @@ sets up the fast path and undoes it afterwards:
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import os
 import shutil
 import tempfile
@@ -59,6 +60,7 @@ class PolicyConfig:
     head_backend: str = "checkpoint"  # checkpoint (reference) | analytic (exact custom backward)
     head_checkpointing: bool = True
     deduplicate_responses: bool = False  # exact shared scoring / weighted PPO rows; native research preset
+    independent_sampling_seeds: bool = False  # independent reproducible requests inside explicit sampling streams
     chunked_head: bool = True   # false: dense reference path for equivalence/profiling
     backend: str = "hf"          # generation engine: hf | vllm (scoring/training are always HF)
     merge_lora: bool = True      # hf: merge LoRA into the weights while generating
@@ -334,6 +336,15 @@ class LLMPolicy:
         params = SamplingParams(max_tokens=c.max_new_tokens, **sampling,
                                 temperature=0.0 if greedy else c.temperature,
                                 top_p=1.0 if greedy else c.top_p)
+        if self._sampling_seed is not None and c.independent_sampling_seeds:
+            # One fixed SamplingParams.seed reused for every request correlates
+            # sibling trajectories. Separate request streams preserve the same
+            # categorical policy while allowing independent evaluation trials.
+            call = self._sampling_calls - 1
+            params = [SamplingParams(max_tokens=c.max_new_tokens,
+                seed=int.from_bytes(hashlib.blake2b(f"{self._sampling_seed}:{call}:{i}".encode(), digest_size=8).digest(), "little") & ((1 << 63) - 1),
+                temperature=0.0 if greedy else c.temperature, top_p=1.0 if greedy else c.top_p)
+                for i in range(len(prompts))]
         p_ids = [self.encode_prompt(p) for p in prompts]
         outs = self._llm.generate([{"prompt_token_ids": p} for p in p_ids], params,
                                   lora_request=self._lora_request, use_tqdm=False)

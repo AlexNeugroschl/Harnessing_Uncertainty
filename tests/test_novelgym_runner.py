@@ -26,6 +26,20 @@ def test_matrix_matches_tasks_and_reuses_identical_stationary_controls(tmp_path)
     assert all(j["cfg"].seed == low.seed and j["cfg"].env == low.env for j in switched)
 
 
+def test_matched_control_preserves_planned_exposure_with_decay(tmp_path):
+    from empg.curiosity import CuriosityController, schedule_multiplier
+    jobs = runner.plan(arguments(tmp_path, "--schedules", "switch", "--treatments", "matched", "oracle",
+                                 "--", "advantage.curiosity.schedule=linear"))
+    totals = []
+    for job in jobs:
+        cfg = job["cfg"]
+        cur = cfg.advantage.curiosity
+        controller = CuriosityController(cur)
+        totals.append(sum(cur.weight * schedule_multiplier(cur, i, cfg.train.iterations) *
+                          controller.multiplier(i, cfg.nonstationary) for i in range(1, cfg.train.iterations + 1)))
+    assert totals[0] == pytest.approx(totals[1])
+
+
 def test_recurring_and_short_manual_workloads_validate_before_model_loading(tmp_path):
     jobs = runner.plan(arguments(tmp_path, "--schedules", "recurring", "stationary", "--switches", "3", "6",
                                  "--treatments", "oracle", "--", "train.iterations=8"))

@@ -24,6 +24,7 @@ class Step:
     obs: str = ""         # observation the action led to (s_{t+1})
     state_keys: dict = field(default_factory=dict)  # keys of s_{t+1} (curiosity)
     truncated: bool = False  # response hit max_new_tokens before EOS
+    diagnostics: dict = field(default_factory=dict)  # observable native transition, never hidden rules
 
 
 @dataclass
@@ -97,6 +98,7 @@ def run_episodes(policy, bench: Benchmark, tasks: list[str], groups: list[int],
                         active, p_ids, r_ids, texts, parsed, results):
                     trajs[i].steps.append(Step(p, r, text, action, valid, obs=o,
                                                state_keys=_keys(o, info),
+                                               diagnostics=dict(info.get("diagnostics", {})),
                                                truncated=policy.truncated(r)))
                     info.setdefault("task", infos[i]["task"])
                     history[i].append((obs[i], action))

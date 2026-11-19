@@ -21,13 +21,14 @@ from .reporting import read_jsonl, report
 TREATMENTS = ("none", "constant", "high", "matched", "oracle", "detected", "clock")
 
 
-def treatments(args, nc, iterations):
+def treatments(args, nc, iterations, curiosity=None):
     """Matched is equal planned coefficient exposure, not equal realized reward.
 
     Actual state novelty and episode lengths depend on the policy; realized
     intrinsic rewards are logged separately and cannot be matched in advance.
     """
-    from empg.curiosity import CuriosityConfig, CuriosityController
+    from empg.curiosity import CuriosityConfig, CuriosityController, schedule_multiplier
+    curiosity = curiosity or CuriosityConfig()
     for kind in args.treatments:
         factors = [1.] if kind in ("none", "constant") else args.boost_factors
         for factor in factors:
@@ -39,7 +40,8 @@ def treatments(args, nc, iterations):
             elif kind == "matched":
                 c = CuriosityConfig(boost="oracle_window", boost_factor=factor, boost_updates=args.boost_updates)
                 controller = CuriosityController(c)
-                weight *= sum(controller.multiplier(i, nc) for i in range(1, iterations + 1)) / iterations
+                exposure = [schedule_multiplier(curiosity, i, iterations) for i in range(1, iterations + 1)]
+                weight *= sum(s * controller.multiplier(i, nc) for i, s in enumerate(exposure, 1)) / sum(exposure)
             elif kind in ("oracle", "detected", "clock"):
                 boost = {"oracle": "oracle_window", "detected": "observed_failure", "clock": "clock_window"}[kind]
             suffix = "" if kind in ("none", "constant") else "_x" + f"{factor:g}".replace(".", "p")
@@ -85,7 +87,7 @@ def plan(args):
                 # At least twice a constructive native solution plus error recovery.
                 horizon = max(template.train.max_steps, 2 * nominal_solution_length(depth, novelty, "novelty") + 8)
                 for seed in args.seeds:
-                    for treatment, options in treatments(args, nc, template.train.iterations):
+                    for treatment, options in treatments(args, nc, template.train.iterations, template.advantage.curiosity):
                         overrides = [*shared, f"env.recipe_depth={depth}", f"env.novelty={novelty}",
                             f"nonstationary.schedule={schedule}", f"nonstationary.switch_iteration={switches[0]}",
                             f"nonstationary.switch_iterations={json.dumps(nc.switch_iterations)}",
@@ -130,7 +132,7 @@ def execution_key(cfg):
     return json.dumps([data, weights], sort_keys=True)
 def parser():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--tier", choices=["novelgym_screen", "novelgym", "novelgym_12h"], default="novelgym_screen")
+    ap.add_argument("--tier", choices=["novelgym_screen", "novelgym", "novelgym_12h", "novelgym_recovery", "novelgym_recovery_12h"], default="novelgym_screen")
     ap.add_argument("--backbone", choices=["grpo", "empg"], default="grpo")
     ap.add_argument("--depths", type=int, nargs="+", default=[4])
     ap.add_argument("--novelties", nargs="+", choices=["tool", "recipe", "resource"], default=["tool"])

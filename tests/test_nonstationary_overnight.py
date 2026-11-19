@@ -51,6 +51,23 @@ def test_insufficient_baseline_competence_stops_before_fitting(prepared):
         overnight.freeze(args, adapter, path, 12 * 3600)
 
 
+def test_recovery_protocol_cannot_freeze_without_learning_evidence(prepared):
+    args, adapter, path, _ = prepared
+    args.tier = "novelgym_recovery_12h"
+    with pytest.raises(ValueError, match="learning profile"):
+        overnight.freeze(args, adapter, path, 43200)
+
+
+def test_fixed_baseline_rounds_allocate_remaining_work_to_adaptation(prepared):
+    args, adapter, path, _ = prepared
+    args.pre_change_updates = 4
+    args.no_reserve = True
+    frozen = overnight.freeze(args, adapter, path, 43200)
+    for job in overnight.deserialize_jobs(frozen["jobs"]):
+        assert job["cfg"].nonstationary.switch_iteration == 5
+        assert job["cfg"].train.iterations - 4 >= 8
+
+
 def test_custom_curiosity_coefficient_is_preserved_in_both_blocks(prepared):
     args, adapter, path, _ = prepared
     args.eta = .123

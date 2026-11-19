@@ -23,7 +23,8 @@ def runtime_identity(cfg):
     from empg.config import config_dict
     import torch
     root = Path(__file__).resolve().parents[2]
-    files = [root / "empg" / name for name in ("policy.py", "scoring.py", "trainer.py", "loss.py", "rollout.py", "envs/novelgym_env.py")]
+    files = [root / "empg" / name for name in ("policy.py", "scoring.py", "trainer.py", "loss.py", "rollout.py",
+             "curiosity.py", "advantages.py", "diagnostics.py", "envs/novelgym_env.py")]
     digest = hashlib.sha256()
     for path in files:
         digest.update(path.read_bytes())
@@ -35,9 +36,11 @@ def runtime_identity(cfg):
             "policy": data["policy"], "environment": data["env"], "benchmark": cfg.benchmark,
             "evaluation": {k: getattr(cfg.eval, k) for k in ("batch_envs", "max_steps", "greedy", "temperature")},
             "intervention": {"change": cfg.nonstationary.change, "feedback": cfg.nonstationary.feedback},
+            "intrinsic": {k: getattr(cfg.advantage.curiosity, k) for k in ("key", "bonus", "scope", "mode")},
             "initial_adapter_sha256": cfg.train.initial_adapter_sha256, "execution_sha256": digest.hexdigest(),
             "train": {k: getattr(cfg.train, k) for k in ("games_per_iter", "group_size", "max_steps", "ppo_epochs",
-                "mini_batch_size", "mini_batches", "shuffle", "kl_coef", "entropy_coef", "reward_mode", "reward_source")}}
+                "mini_batch_size", "mini_batches", "shuffle", "kl_coef", "entropy_coef", "reward_mode", "reward_source",
+                "lr", "weight_decay", "clip_low", "clip_high", "dual_clip")}}
 
 
 def measure(cfg, out, repeats=2, validation_tasks=12):
@@ -148,23 +151,47 @@ def measure(cfg, out, repeats=2, validation_tasks=12):
     return result
 
 
-def tune(cfg, out, repeats=2):
+def checked_candidates(updates, repeats, tolerance):
+    """Require both complete timing repeats and bounded real update differences."""
+    candidates, valid, rejected = {}, {}, {}
+    for row in updates:
+        candidates.setdefault(row["name"], []).append(row)
+    for name, rows in candidates.items():
+        if len(rows) != repeats or any(r["status"] != "ok" for r in rows):
+            rejected[name] = "incomplete or failed update measurements"
+        elif any(r.get("adapter_max_abs_delta") is None or not math.isfinite(r["adapter_max_abs_delta"])
+                 or r["adapter_max_abs_delta"] > tolerance for r in rows):
+            rejected[name] = f"adapter update differs from reference by more than {tolerance:g}"
+        else:
+            valid[name] = rows
+    return valid, rejected
+
+
+def update_tolerance(updates, learning_rate):
+    noise = max((r["adapter_max_abs_delta"] for r in updates if r["name"] == "reference"
+                 and r["status"] == "ok" and r.get("adapter_max_abs_delta") is not None
+                 and math.isfinite(r["adapter_max_abs_delta"])), default=0.)
+    return max(2e-6, learning_rate, 1.5 * noise), noise
+
+
+def tune(cfg, out, repeats=3):
     """Compare checkpoint policies on shared data; retain a measured safe choice."""
     from benchmarks.tune_updates import profile
     out = Path(out)
+    variants = (["reference", "micro4"] if cfg.env.get("suite_version") == 4 else
+                ["reference", "native_selective2", "selective900"])
     result = profile(cfg, 6, cfg.train.games_per_iter * cfg.train.group_size, repeats,
-        ["reference", "native_selective2", "selective900"], rollout_cache=out / "tuning_rollout.json",
+        variants, rollout_cache=out / "tuning_rollout.json",
         out=out / "tuning.json")
-    candidates = {}
-    for row in result["updates"]:
-        candidates.setdefault(row["name"], []).append(row)
-    valid = {name: rows for name, rows in candidates.items() if len(rows) == repeats and all(r["status"] == "ok" for r in rows)}
+    tolerance, reference_noise = update_tolerance(result["updates"], cfg.train.lr)
+    valid, rejected = checked_candidates(result["updates"], repeats, tolerance)
     if "reference" not in valid:
         raise RuntimeError("reference GPU update failed")
     median = {name: statistics.median(r["seconds"] for r in rows) for name, rows in valid.items()}
     best = min(median, key=median.get)
-    # Avoid selecting a noisy small improvement from a two-repeat screen.
-    if median[best] >= .95 * median["reference"]:
+    # A small timing gain does not justify changing the production kernel shape.
+    fraction = .90 if cfg.env.get("suite_version") == 4 else .95
+    if median[best] >= fraction * median["reference"]:
         best = "reference"
     selected = valid[best][0]["policy"]
     cfg = dataclasses.replace(cfg, policy=dataclasses.replace(cfg.policy, **{
@@ -177,6 +204,17 @@ def tune(cfg, out, repeats=2):
                          out=out / "selected_context_stress.json", stress_max_length=True)
         if any(row["status"] != "ok" for row in stress["updates"]):
             raise RuntimeError("selected GPU settings failed the maximum-context stress check")
+        if cfg.policy.micro_batch_tokens and cfg.policy.micro_batch_size > 1:
+            # Also fill the padded token budget with distinct rows, so response
+            # deduplication cannot accidentally turn this into a smaller test.
+            prompt = cfg.policy.micro_batch_tokens // cfg.policy.micro_batch_size - cfg.policy.max_new_tokens
+            if prompt > 0:
+                packed_cfg = dataclasses.replace(cfg, policy=dataclasses.replace(cfg.policy,
+                    max_prompt_tokens=min(cfg.policy.max_prompt_tokens, prompt)))
+                packed = profile(packed_cfg, 1, cfg.train.group_size, 1, ["reference"],
+                    out=out / "selected_padded_budget_stress.json", stress_max_length=True)
+                if any(row["status"] != "ok" for row in packed["updates"]):
+                    raise RuntimeError("selected GPU settings failed the full padded-token stress check")
         boundary = cfg.policy.checkpoint_min_tokens - 1
         if boundary > cfg.policy.max_new_tokens:
             boundary_cfg = dataclasses.replace(cfg, policy=dataclasses.replace(cfg.policy,
@@ -191,7 +229,9 @@ def tune(cfg, out, repeats=2):
                     score_batch_size=result["config"]["policy"].get("score_batch_size", 0),
                     micro_batch_tokens=result["config"]["policy"].get("micro_batch_tokens", 0),
                     checkpoint_min_tokens=result["config"]["policy"].get("checkpoint_min_tokens", 0)))
-    write_json(out / "selection.json", {"selected": best, "median_seconds": median, "policy": dataclasses.asdict(cfg.policy)})
+    write_json(out / "selection.json", {"selected": best, "median_seconds": median, "policy": dataclasses.asdict(cfg.policy),
+                                        "adapter_tolerance": tolerance, "reference_repeatability_noise": reference_noise,
+                                        "minimum_relative_speedup": 1 - fraction, "rejected": rejected})
     return cfg
 
 
@@ -207,6 +247,7 @@ def main(argv=None):
     ap.add_argument("--repeats", type=int, default=2)
     ap.add_argument("--out", default="runs/nonstationary/calibration")
     ap.add_argument("--tune", action="store_true")
+    ap.add_argument("--learning-profile")
     ap.add_argument("--tier", default="novelgym_screen", help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
     if not 2 <= args.depth <= 32 or args.repeats < 1:
@@ -214,8 +255,13 @@ def main(argv=None):
     from benchmarks.common import load
     from empg.envs.novelgym_env import nominal_solution_length
     horizon = max(48, 2 * nominal_solution_length(args.depth, args.novelty, "novelty") + 8)
-    cfg = load("grpo", args.tier, [f"train.initial_adapter={args.initial_adapter}",
-        f"env.recipe_depth={args.depth}", f"env.novelty={args.novelty}", f"train.max_steps={horizon}", f"eval.max_steps={horizon}"])
+    overrides = [f"train.initial_adapter={args.initial_adapter}",
+        f"env.recipe_depth={args.depth}", f"env.novelty={args.novelty}", f"train.max_steps={horizon}", f"eval.max_steps={horizon}"]
+    if args.learning_profile:
+        from .evidence import load_learning_profile
+        learning = load_learning_profile(args.learning_profile, args.initial_adapter)
+        overrides += [f"{k}={json.dumps(v)}" for k, v in learning["settings"].items()]
+    cfg = load("grpo", args.tier, overrides)
     if args.tune:
         cfg = tune(cfg, args.out)
     measure(cfg, args.out, args.repeats)

@@ -1,0 +1,17 @@
+# Fitted only after a development learnability gate passes.
+inherit: novelgym_recovery.yaml
+out_dir: runs/nonstationary/recovery_12h
+env:
+  recipe_depth: 8
+train:
+  iterations: 32
+  max_steps: 74
+nonstationary:
+  switch_iteration: 5
+  probe_every: 8
+  probe_tasks: 12
+eval:
+  split: valid_unseen
+  max_tasks: 32
+  max_steps: 74
+  temperature: 0.4

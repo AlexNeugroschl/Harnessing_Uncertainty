@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import re
 from functools import lru_cache
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -48,6 +49,7 @@ class TrainConfig:
     save_every: int = 25
     max_env_steps: int = 0       # stop at a batch boundary; 0 = iterations only
     max_seconds: float = 0.0     # rollout+update budget; may overshoot by one batch
+    trace_episodes: int = 0     # bounded observable behavior traces per update; 0 disables
 
 
 @dataclass
@@ -61,6 +63,8 @@ class EvalConfig:
     batch_envs: int = 32
     selection: str = "random"   # random | stratified (proportional task-type allocation)
     selection_seed: int = 0     # independent of training seed, shared by all arms
+    trace_tasks: int = 2
+    trace_steps: int = 16
 
 
 @dataclass
@@ -90,6 +94,9 @@ def _optional_defaults(data: dict) -> dict:
         if cur.get("boost", "none") == "none":
             for key in ("boost", "boost_factor", "boost_updates", "failure_threshold", "failure_ema", "detector_warmup"):
                 cur.pop(key, None)
+        if cur.get("detector_rearm", "legacy") == "legacy" or cur.get("boost", "none") != "observed_failure":
+            for key in ("detector_rearm", "rearm_updates", "rearm_tolerance"):
+                cur.pop(key, None)
         result["advantage"]["curiosity"] = cur
     if not result.get("nonstationary", {}).get("enabled", False):
         result.pop("nonstationary", None)
@@ -102,12 +109,13 @@ def _optional_defaults(data: dict) -> dict:
     for section, defaults in {
         "train": {"entropy_coef": 0.0, "reward_mode": "trajectory", "mini_batch_size": 0,
                   "shuffle": True, "dual_clip": 0.0, "reward_source": "success",
-                  "environment_reward_scale": 1.0, "initial_adapter": "", "initial_adapter_sha256": ""},
+                  "environment_reward_scale": 1.0, "initial_adapter": "", "initial_adapter_sha256": "", "trace_episodes": 0},
         "policy": {"amp": False, "vllm_max_num_seqs": 256, "max_prompt_tokens": 0,
                    "checkpoint_min_tokens": 0,
                    "score_batch_size": 0, "micro_batch_tokens": 0, "cuda_memory_fraction": 0.0,
-                   "head_backend": "checkpoint", "head_checkpointing": True, "deduplicate_responses": False},
-        "eval": {"temperature": None, "sampling_seed": None},
+                   "head_backend": "checkpoint", "head_checkpointing": True, "deduplicate_responses": False,
+                   "independent_sampling_seeds": False},
+        "eval": {"temperature": None, "sampling_seed": None, "trace_tasks": 2, "trace_steps": 16},
         "advantage": {"entropy_eps": 1e-6, "scale_eps": 0.0},
     }.items():
         if section in result:
@@ -170,10 +178,17 @@ def load_config(path: str | None = None, overrides: list[str] | None = None,
         *parents, leaf = key.split(".")
         for p in parents:
             node = node.setdefault(p, {})
-        node[leaf] = yaml.safe_load(val)
+        value = yaml.safe_load(val)
+        # YAML 1.1 treats e.g. '3e-06' as a string, although it is a valid
+        # Python/JSON number. Numeric CLI overrides must keep numeric types.
+        if isinstance(value, str) and re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)[eE][+-]?\d+", val):
+            value = float(val)
+        node[leaf] = value
     cfg = _build(Config, data)
     cfg.nonstationary.validate(cfg.train.iterations)
     cfg.advantage.curiosity.validate()
+    if cfg.advantage.curiosity.key == "progress" and cfg.benchmark != "novelgym":
+        raise ValueError("progress novelty requires the native observable inventory/selection adapter")
     if cfg.train.initial_adapter:
         observed = adapter_fingerprint(cfg.train.initial_adapter)
         if cfg.train.initial_adapter_sha256 and cfg.train.initial_adapter_sha256 != observed:

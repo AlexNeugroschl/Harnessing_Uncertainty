@@ -21,12 +21,28 @@ def expert_actions(depth):
 
 def baseline_examples(bench, task, recovery_probability, rng):
     """Initial-rule clean/recovery prompts; no changed-rule solution is shown."""
+    for prompt, action, _ in weighted_baseline_examples(bench, task, recovery_probability, rng):
+        yield prompt, action
+
+
+def weighted_baseline_examples(bench, task, recovery_probability, rng, tool_probability=0.):
+    """Optional tool use under baseline rules, with exact alternative-target weights.
+
+    Selecting the axe and harvesting directly are BOTH valid baseline choices.
+    A sampled baseline route advances the world; no changed-rule trace is used.
+    """
+    if not 0 <= tool_probability < 1:
+        raise ValueError("tool probability must be in [0, 1)")
     env = bench.make_env(task)
     history = []
     try:
         obs, info = env.reset()
         for action in expert_actions(bench.depth):
-            yield bench.prompt(info["task"], obs, info["admissible"], history), action
+            optional_tool = action == "break_block" and env.entity.selectedItem != "axe" and tool_probability > 0
+            targets = [(action, 1 - tool_probability), ("select_axe", tool_probability)] if optional_tool else [(action, 1.)]
+            prompt = bench.prompt(info["task"], obs, info["admissible"], history)
+            for target, weight in targets:
+                yield prompt, target, weight
             if rng.random() < recovery_probability:
                 perturbation = "break_block" if env._visible()["ahead"] == "air" else "craft_pogo_stick"
                 before = info["state_keys"]
@@ -35,7 +51,16 @@ def baseline_examples(bench, task, recovery_probability, rng):
                     raise RuntimeError("recovery demonstration changed the native world")
                 history.append((obs, perturbation))
                 obs, info = result, new_info
-                yield bench.prompt(info["task"], obs, info["admissible"], history), action
+                prompt = bench.prompt(info["task"], obs, info["admissible"], history)
+                for target, weight in targets:
+                    yield prompt, target, weight
+            if optional_tool and rng.random() < tool_probability:
+                previous = obs
+                obs, _, done, info = env.step("select_axe")
+                history.append((previous, "select_axe"))
+                if done or info["intervention_metrics"]["action_failures"]:
+                    raise RuntimeError("optional baseline tool selection failed")
+                yield bench.prompt(info["task"], obs, info["admissible"], history), action, 1.
             previous = obs
             obs, _, done, info = env.step(action)
             history.append((previous, action))
@@ -51,7 +76,10 @@ def supervised_epoch(policy, optimizer, data, order, batch_size):
     import torch
     from empg.policy import token_microbatches
 
-    lengths = [len(p) + len(r) for p, r in data]
+    lengths = [len(row[0]) + len(row[1]) for row in data]
+    weights = [row[2] if len(row) == 3 else 1. for row in data]
+    if not weights or any(not math.isfinite(w) or w <= 0 for w in weights):
+        raise ValueError("positive finite demonstration weights required")
     total_loss = torch.zeros((), device=policy.device)
     total_tokens = 0
     parameters = policy.parameters()
@@ -61,11 +89,12 @@ def supervised_epoch(policy, optimizer, data, order, batch_size):
             module.eval()
     for at in range(0, len(order), batch_size):
         rows = sorted(order[at:at + batch_size], key=lambda i: lengths[i])
-        tokens = sum(len(data[i][1]) for i in rows)
+        tokens = sum(weights[i] * len(data[i][1]) for i in rows)
         optimizer.zero_grad(set_to_none=True)
         for micro in token_microbatches(rows, lengths, policy.cfg.micro_batch_size, policy.cfg.micro_batch_tokens):
             lp, _, mask = policy.forward_logprobs([data[i][0] for i in micro], [data[i][1] for i in micro])
-            loss = -lp[mask].sum()
+            weighted_mask = mask * torch.tensor([weights[i] for i in micro], device=policy.device)[:, None]
+            loss = -(lp * weighted_mask).sum()
             (loss / tokens).backward()
             total_loss.add_(loss.detach())
         torch.nn.utils.clip_grad_norm_(parameters, 1., error_if_nonfinite=True)
@@ -104,6 +133,9 @@ def parser():
     ap.add_argument("--validation-tasks", type=int, default=16)
     ap.add_argument("--validation-seed", type=int, default=17)
     ap.add_argument("--min-success", type=float, default=.75)
+    ap.add_argument("--tool-probability", type=float, default=0., help="baseline-only alternative target mass for optional axe selection")
+    ap.add_argument("--min-tool-probability", type=float, default=0.)
+    ap.add_argument("--max-tool-probability", type=float, default=1.)
     ap.add_argument("--require-competence", action="store_true")
     ap.add_argument("--tier", default="novelgym_screen", help=argparse.SUPPRESS)
     return ap
@@ -122,11 +154,13 @@ def main(argv=None):
             or min(args.seed, args.validation_seed) < 0 or not math.isfinite(args.lr) or args.lr <= 0
             or not 0 <= args.recovery_probability <= 1 or not 0 < args.min_success <= 1):
         ap.error("invalid warmup counts, depths, seeds or learning parameters")
+    if not 0 <= args.tool_probability < 1 or not 0 <= args.min_tool_probability <= args.max_tool_probability <= 1:
+        ap.error("invalid optional tool distribution or competence bounds")
     import numpy as np
     import torch
     from benchmarks.common import load
     from empg.config import adapter_fingerprint
-    from empg.envs.novelgym_env import NovelGymBenchmark, SUITE_VERSION
+    from empg.envs.novelgym_env import NovelGymBenchmark
     from empg.policy import LLMPolicy
     from empg.trainer import seed_everything
 
@@ -145,16 +179,17 @@ def main(argv=None):
         data = []
         demo_rng = np.random.default_rng(args.seed)
         for depth in args.depths:
-            bench = NovelGymBenchmark(recipe_depth=depth, action_parser="native")
+            bench = NovelGymBenchmark(**{**cfg.env, "recipe_depth": depth})
             for task in bench.tasks("train")[:args.games]:
-                for prompt, action in baseline_examples(bench, task, args.recovery_probability, demo_rng):
+                for prompt, action, weight in weighted_baseline_examples(bench, task, args.recovery_probability, demo_rng, args.tool_probability):
                     target = policy.tokenizer("action: " + action, add_special_tokens=False)["input_ids"] + [policy.tokenizer.eos_token_id]
-                    data.append((policy.encode_prompt(prompt), target))
+                    data.append((policy.encode_prompt(prompt), target, weight))
         optimizer = torch.optim.AdamW(policy.parameters(), lr=args.lr, weight_decay=.01)
         rng = np.random.default_rng(args.seed)
         training_seconds = 0.
         manifest = {"method": "baseline-only supervised skill initialization with failure recovery",
-                    "suite_version": SUITE_VERSION, "options": vars(args), "policy": dataclasses.asdict(cfg.policy),
+                    "suite_version": cfg.env["suite_version"], "options": vars(args), "policy": dataclasses.asdict(cfg.policy),
+                    "objective": "sum(weight * response-token NLL) / sum(weight * response length) per optimizer batch",
                     "response_rows": len(data), "training_task_split": "train", "changed_regime_demonstrations": 0}
         for epoch in range(1, args.epochs + 1):
             epoch_start = time.perf_counter()
@@ -167,11 +202,22 @@ def main(argv=None):
                 results = validate(policy, cfg, args.depths, args.validation_tasks, args.validation_seed, out, epoch)
                 row["validation"] = {d: result["all"] for d, result in results.items()}
                 score = min(row["validation"].values())
-                if score > best_score:
+                exploration_ok = True
+                if args.tool_probability or args.min_tool_probability:
+                    from .diagnostics import action_diagnostics
+                    bench = NovelGymBenchmark(**{**cfg.env, "recipe_depth": min(args.depths)})
+                    diagnostic = action_diagnostics(policy, bench, bench.tasks("valid_seen")[:4])
+                    write_json(out / f"action_diagnostics_epoch_{epoch:03d}.json", diagnostic)
+                    row["tool_probability"] = diagnostic["mean_tool_probability"]
+                    exploration_ok = (args.min_tool_probability <= row["tool_probability"] <= args.max_tool_probability
+                                      and diagnostic["mean_catalog_mass"] >= .5)
+                    row["exploration_ready"] = exploration_ok
+                    policy.save(str(out / "candidates" / f"epoch_{epoch:03d}"))
+                if exploration_ok and score > best_score:
                     best_score = score
                     policy.save(str(out / "adapter"))
                     manifest["best_epoch"] = epoch
-                ready = score >= args.min_success
+                ready = score >= args.min_success and exploration_ok
             row["seconds"] = time.perf_counter() - start
             records.append(row)
             manifest.update(epochs=records, ready=best_score >= args.min_success, best_min_success=best_score,
@@ -180,7 +226,7 @@ def main(argv=None):
             print(json.dumps(row), flush=True)
             if ready:
                 break
-        manifest.update(adapter_sha256=adapter_fingerprint(out / "adapter"),
+        manifest.update(adapter_sha256=adapter_fingerprint(out / "adapter") if (out / "adapter").exists() else None,
             peak_reserved_vram_gib=torch.cuda.max_memory_reserved() / 2**30 if torch.cuda.is_available() else 0.)
         write_json(out / "warmup.json", manifest)
         write_json(out / "complete.json", {"ready": manifest["ready"], "adapter_sha256": manifest["adapter_sha256"]})

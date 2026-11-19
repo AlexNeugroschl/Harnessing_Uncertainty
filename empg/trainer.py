@@ -13,6 +13,7 @@ import torch
 from empg.advantages import compute_advantages, normalize_entropy
 from empg.config import Config, adapter_fingerprint, config_dict, config_fingerprint, config_matches
 from empg.curiosity import CuriosityController, exploration_stats, intrinsic_rewards, schedule_multiplier
+from empg.diagnostics import behavior_metrics, behavior_trace
 from empg.envs.base import make_benchmark
 from empg.loss import policy_loss
 from empg.policy import LLMPolicy, token_microbatches
@@ -184,6 +185,7 @@ def update(policy: LLMPolicy, opt, trajs: list[Trajectory], cfg: Config,
     effective_intrinsic = adv - base_adv
     share = float(np.abs(effective_intrinsic).mean() / max(np.abs(adv).mean(), 1e-8))
     return {
+        **behavior_metrics(trajs),
         "episodes": len(trajs),
         "env_return_sum": sum(tr.env_return for tr in trajs),
         "env_return": float(np.mean([tr.env_return for tr in trajs])),
@@ -249,7 +251,7 @@ def train(cfg: Config, log=print) -> LLMPolicy:
         raise ValueError("observed_failure currently requires the NovelGym observable feedback adapter")
     if tc.reward_source not in ("success", "environment") or not np.isfinite(tc.environment_reward_scale):
         raise ValueError("invalid train.reward_source/environment_reward_scale")
-    if min(tc.iterations, tc.games_per_iter, tc.max_steps, tc.mini_batches, tc.ppo_epochs) < 1:
+    if tc.trace_episodes < 0 or min(tc.iterations, tc.games_per_iter, tc.max_steps, tc.mini_batches, tc.ppo_epochs) < 1:
         raise ValueError("training counts/horizon must be positive")
     if tc.group_size < 2:
         raise ValueError("GRPO comparisons require group_size >= 2")
@@ -261,6 +263,8 @@ def train(cfg: Config, log=print) -> LLMPolicy:
         raise ValueError("training budgets must be nonnegative")
     if not np.isfinite(tc.entropy_coef) or tc.entropy_coef < 0:
         raise ValueError("train.entropy_coef must be finite and nonnegative")
+    if not isinstance(tc.lr, (int, float)) or not np.isfinite(tc.lr) or tc.lr <= 0:
+        raise ValueError("train.lr must be finite and positive")
     if tc.reward_mode not in ("trajectory", "step"):
         raise ValueError("train.reward_mode must be 'trajectory' or 'step'")
     if (not np.isfinite(cfg.advantage.entropy_eps) or cfg.advantage.entropy_eps <= 0 or
@@ -312,6 +316,7 @@ def train(cfg: Config, log=print) -> LLMPolicy:
     stop_reason = "iterations"
     with ExitStack() as cleanup, open(run_dir / "metrics.jsonl", "w") as mf, \
             open(run_dir / "resp_lengths_train.jsonl", "w") as lf:
+        trace_file = cleanup.enter_context((run_dir / "behavior_traces.jsonl").open("w")) if tc.trace_episodes else None
         if hasattr(bench, "close"):
             cleanup.callback(bench.close)
         cleanup.enter_context(_close_policy_on_error(policy))
@@ -343,6 +348,12 @@ def train(cfg: Config, log=print) -> LLMPolicy:
             stats = update(policy, opt, trajs, cfg, rng, iteration=it, curiosity_multiplier=multiplier)
             controller.observe(it, stats.get("action_failure_rate"))
             stats["curiosity_detector_triggered"] = controller.triggered
+            if cur.boost == "observed_failure":
+                stats.update(curiosity_detector_armed=controller.armed, failure_ema=controller.ema)
+            if trace_file:
+                indices = np.linspace(0, len(trajs) - 1, min(tc.trace_episodes, len(trajs)), dtype=int)
+                trace_file.write(json.dumps({"iteration": it, "episodes": [behavior_trace(trajs[i]) for i in indices]}) + "\n")
+                trace_file.flush()
             stats.update(iteration=it, t_rollout=t1 - t0, t_update=time.time() - t1,
                          **rollout_times, **gpu_memory_check(log))
             cumulative_steps += sum(len(tr.steps) for tr in trajs)

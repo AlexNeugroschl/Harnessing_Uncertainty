@@ -23,6 +23,7 @@ def report(jobs, out):
         rows = read_jsonl(cfg.run_dir / "metrics.jsonl")
         probes = read_jsonl(cfg.run_dir / "adaptation_probes.jsonl")
         record = {**identity, "adaptation": summarize(rows, probes, cfg.nonstationary),
+                  "curiosity_key": cfg.advantage.curiosity.key,
                   "optional_reserve": bool(job.get("optional_reserve", False)),
                   "updates": len(rows), "complete": False,
                   "last_curiosity_weight": rows[-1].get("curiosity_weight") if rows else None,
@@ -32,6 +33,15 @@ def report(jobs, out):
                   "training_seconds": rows[-1].get("seconds_total", 0) if rows else 0,
                   "peak_vram_gib": max((r.get("gpu_peak_gb", 0) for r in rows), default=0),
                   "mean_truncation": sum(r.get("trunc_rate", 0) for r in rows) / max(1, len(rows))}
+        observed = [r for r in rows if r.get("regime") == "novelty"]
+        if observed and "tool_selection_episodes" in observed[0]:
+            episodes = sum(r["episodes"] for r in observed)
+            record["changed_rule_behavior"] = {
+                "episodes": episodes,
+                "tool_selection_fraction": sum(r["tool_selection_episodes"] for r in observed) / episodes,
+                "harvesting_fraction": sum(r["harvesting_episodes"] for r in observed) / episodes,
+                "max_component_depth": max(r["max_component_depth"] for r in observed),
+                "repeated_failed_actions": sum(r["repeated_failed_actions"] for r in observed)}
         if "alias_of" in job:
             record["reused_from"] = str(cfg.run_dir)
         # Final adapter/evaluation completion is required to enter comparisons.
@@ -49,8 +59,8 @@ def report(jobs, out):
         if candidate in ("none", "constant"):
             continue
         controls = ["constant"]
-        if candidate.startswith("oracle_"):
-            suffix = candidate.removeprefix("oracle")
+        if candidate.startswith(("oracle_", "detected_")):
+            suffix = candidate[candidate.index("_"):]
             controls += ["high" + suffix, "matched" + suffix]
         for control in controls:
             left = completed.get((cohort, depth, novelty, schedule, control), [])
@@ -120,7 +130,13 @@ def report(jobs, out):
     text += "\nRecovery metrics and per-change competence are in summary.json; update/probe trajectories are in learning_curves.json.\n"
     (out / "comparison.md").write_text(text, encoding="utf-8")
     plot_curves(jobs, panels, out)
+    plot_behavior_curves(jobs, panels, out)
     return payload
+
+
+def _plot_group(job):
+    return (job["depth"], job["novelty"], job["schedule"],
+            f"reserve_s{job['seed']}" if job.get("optional_reserve") else "primary")
 
 
 def plot_curves(jobs, panels, out):
@@ -129,14 +145,11 @@ def plot_curves(jobs, panels, out):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    def group(job):
-        return (job["depth"], job["novelty"], job["schedule"],
-                f"reserve_s{job['seed']}" if job.get("optional_reserve") else "primary")
-    groups = sorted({group(j) for j in jobs})
+    groups = sorted({_plot_group(j) for j in jobs})
     for depth, novelty, schedule, cohort in groups:
         fig, axes = plt.subplots(2, 2, figsize=(12, 8))
         for job in jobs:
-            if group(job) != (depth, novelty, schedule, cohort) or "alias_of" in job:
+            if _plot_group(job) != (depth, novelty, schedule, cohort) or "alias_of" in job:
                 continue
             data = panels[str(job["cfg"].run_dir)]
             rows = data["metrics"]
@@ -161,4 +174,41 @@ def plot_curves(jobs, panels, out):
         fig.tight_layout()
         suffix = "" if cohort == "primary" else "_" + cohort
         fig.savefig(out / f"curves_depth_{depth}_{novelty}_{schedule}{suffix}.png", dpi=150)
+        plt.close(fig)
+
+
+def plot_behavior_curves(jobs, panels, out):
+    measured = [job for job in jobs if "alias_of" not in job and
+                any("tool_selection_episodes" in r for r in panels[str(job["cfg"].run_dir)]["metrics"])]
+    if not measured:
+        return
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    for identity in sorted({_plot_group(job) for job in measured}):
+        depth, novelty, schedule, cohort = identity
+        fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+        for job in measured:
+            if _plot_group(job) != identity:
+                continue
+            rows = panels[str(job["cfg"].run_dir)]["metrics"]
+            x = [r["iteration"] for r in rows]
+            values = ([r["tool_selection_episodes"] / r["episodes"] for r in rows],
+                      [r["harvesting_episodes"] / r["episodes"] for r in rows],
+                      [r["max_component_depth"] for r in rows],
+                      [r["intrinsic_effective_abs"] for r in rows])
+            for axis, y in zip(axes.flat, values):
+                axis.plot(x, y, marker=".", label=f"{job['treatment']} s{job['seed']}")
+        for axis, title in zip(axes.flat, ("Episodes selecting the axe", "Episodes successfully harvesting",
+                                         "Highest observed component stage", "Mean absolute centered intrinsic contribution")):
+            axis.set(title=title, xlabel="Training update")
+            axis.grid(alpha=.2)
+            axis.legend(fontsize=6)
+        axes[0, 0].set_ylim(0, 1.05)
+        axes[0, 1].set_ylim(0, 1.05)
+        axes[1, 0].set(ylim=(0, depth + .1), yticks=range(depth + 1))
+        fig.suptitle(f"Observable behavior: depth {depth} / {novelty} / {schedule} / {cohort}")
+        fig.tight_layout()
+        suffix = "" if cohort == "primary" else "_" + cohort
+        fig.savefig(out / f"behavior_depth_{depth}_{novelty}_{schedule}{suffix}.png", dpi=150)
         plt.close(fig)

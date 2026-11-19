@@ -33,6 +33,8 @@ def parser():
     ap.add_argument("--maximum-updates", type=int, default=200)
     ap.add_argument("--initial-adapter")
     ap.add_argument("--calibration")
+    ap.add_argument("--learning-profile", help="content-verified two-seed development learning evidence")
+    ap.add_argument("--pre-change-updates", type=int, help="fixed baseline rounds, leaving the fitted remainder for adaptation")
     ap.add_argument("--warmup-hours", type=float, default=.5)
     ap.add_argument("--no-tune", action="store_true")
     ap.add_argument("--prepare-only", action="store_true", help="prepare/validate/freeze the workload without starting the long matrix")
@@ -46,18 +48,25 @@ def parser():
 
 
 def protocol(args):
-    return {k: getattr(args, k) for k in ("depth", "novelty", "seeds", "treatments", "boost_factor", "eta",
+    result = {k: getattr(args, k) for k in ("depth", "novelty", "seeds", "treatments", "boost_factor", "eta",
         "minimum_updates", "maximum_updates", "reserve_seed", "reserve_count", "no_reserve", "hours")}
+    if args.tier != "novelgym_12h" or args.learning_profile or args.pre_change_updates is not None:
+        result.update(tier=args.tier, learning_profile=str(Path(args.learning_profile).resolve()) if args.learning_profile else None,
+                      pre_change_updates=args.pre_change_updates)
+    return result
 
 
 def matrix_argv(args, adapter, calibration, iterations, policy, *, reserve=False, hours=None, reserve_seed=None):
     root = Path(args.root)
-    argv = ["--tier", "novelgym_12h", "--depths", str(args.depth), "--novelties", args.novelty,
+    before = args.pre_change_updates if args.pre_change_updates is not None else iterations // 2
+    if not 1 <= before < iterations:
+        raise ValueError("pre-change updates must leave at least one adaptation update")
+    argv = ["--tier", args.tier, "--depths", str(args.depth), "--novelties", args.novelty,
             "--seeds", *map(str, [args.reserve_seed if reserve_seed is None else reserve_seed] if reserve else args.seeds),
             "--treatments", *([t for t in ("constant", "oracle", "detected") if t in args.treatments] if reserve else args.treatments),
             "--schedules", *(["switch"] if reserve else ["switch", "stationary"]),
             "--eta", str(args.eta), "--boost-factors", str(args.boost_factor), "--boost-updates", str(max(2, iterations // 4)),
-            "--switches", str(iterations // 2 + 1), "--initial-adapter", str(adapter),
+            "--switches", str(before + 1), "--initial-adapter", str(adapter),
             "--runs", str(root / "matrix"), "--out", str(root / ("reserve_results" if reserve else "results"))]
     if calibration:
         argv += ["--calibration", str(calibration)]
@@ -65,6 +74,7 @@ def matrix_argv(args, adapter, calibration, iterations, policy, *, reserve=False
         argv += ["--hours", str(hours)]
     argv += ["--", f"train.iterations={iterations}", f"nonstationary.probe_every={max(1, iterations // 4)}"]
     argv += [f"policy.{key}={json.dumps(value)}" for key, value in policy.items()]
+    argv += [f"{key}={json.dumps(value)}" for key, value in getattr(args, "learning_settings", {}).items()]
     return argv
 
 
@@ -108,6 +118,15 @@ def competence(profile, minimum=.75):
 
 
 def freeze(args, adapter, calibration_path, available_seconds):
+    learning = None
+    if args.learning_profile:
+        from .evidence import load_learning_profile
+        learning = load_learning_profile(args.learning_profile, adapter)
+        if learning["options"]["novelty"] != args.novelty:
+            raise ValueError("learning evidence uses a different change family")
+        args.learning_settings = learning["settings"]
+    elif args.tier == "novelgym_recovery_12h":
+        raise ValueError("recovery experiments require a passing development learning profile")
     profile = json.loads(Path(calibration_path).read_text())
     validate_measurements(profile)
     competence(profile)
@@ -129,11 +148,16 @@ def freeze(args, adapter, calibration_path, available_seconds):
                 if "alias_of" in job:
                     job["alias_of"] += len(reserve)
             reserve.extend(block)
-    return {"schema": 1, "protocol": protocol(args), "initial_adapter": str(Path(adapter).resolve()),
+    frozen = {"schema": 1, "protocol": protocol(args), "initial_adapter": str(Path(adapter).resolve()),
             "calibration": str(Path(calibration_path).resolve()),
             "calibration_sha256": hashlib.sha256(Path(calibration_path).read_bytes()).hexdigest(),
             "workload": workload, "policy": policy, "jobs": serialize_jobs(jobs), "reserve_jobs": serialize_jobs(reserve),
             "note": "Fixed primary workload; optional reserve replication depends on time, never on observed scores."}
+    if learning:
+        frozen.update(learning_profile=str(Path(args.learning_profile).resolve()),
+                      learning_profile_sha256=hashlib.sha256(Path(args.learning_profile).read_bytes()).hexdigest(),
+                      shared_settings=learning["settings"])
+    return frozen
 
 
 def _phase(command, deadline, *, cap=None):
@@ -188,10 +212,24 @@ def prepare(args, root, deadline, state):
         attempts = list((root / "preparation").glob("warmup_*"))
         directory = root / "preparation" / f"warmup_{len(attempts) + 1:03d}"
         depths = sorted({2, 4, args.depth})
-        _phase([sys.executable, "-u", "run_novelgym_warmup.py", "--out", directory,
-            "--depths", *depths, "--epochs", 12, "--games", 8, "--require-competence"],
-            deadline, cap=args.warmup_hours * 3600)
+        recovery = args.tier == "novelgym_recovery_12h"
+        extra = (["--tier", "novelgym_recovery", "--tool-probability", .05, "--min-tool-probability", .005,
+                  "--max-tool-probability", .25, "--validate-every", 1, "--lr", .00003] if recovery else [])
+        command = [sys.executable, "-u", "run_novelgym_warmup.py", "--out", directory,
+                   "--depths", *depths, "--epochs", 8 if recovery else 12,
+                   "--games", 4 if recovery else 8, "--require-competence", *extra]
+        _phase(command, deadline, cap=args.warmup_hours * 3600)
         adapter = directory / "adapter"
+    if args.tier == "novelgym_recovery_12h":
+        if not args.learning_profile:
+            attempts = list((root / "preparation").glob("pilot_*"))
+            directory = root / "preparation" / f"pilot_{len(attempts) + 1:03d}"
+            _phase([sys.executable, "-u", "run_novelgym_pilot.py", "--initial-adapter", adapter,
+                    "--novelty", args.novelty, "--out", directory, "--hours", 1.], deadline)
+            args.learning_profile = str(directory / "learning_profile.json")
+        from .evidence import load_learning_profile
+        args.learning_settings = load_learning_profile(args.learning_profile, adapter)["settings"]
+        state["learning_profile"] = str(args.learning_profile)
     if args.calibration:
         calibration = Path(args.calibration).resolve()
         if not calibration.is_file():
@@ -212,7 +250,9 @@ def prepare(args, root, deadline, state):
     if not calibration.is_file():
         _phase([sys.executable, "-u", "run_novelgym_calibrate.py", "--initial-adapter", adapter,
             "--depth", args.depth, "--novelty", args.novelty, "--repeats", 2,
-            "--out", calibration.parent, *([] if args.no_tune else ["--tune"])], deadline)
+            "--out", calibration.parent, "--tier", args.tier,
+            *(["--learning-profile", args.learning_profile] if args.learning_profile else []),
+            *([] if args.no_tune else ["--tune"])], deadline)
     state["initial_adapter"], state["calibration"] = str(adapter), str(calibration)
     return adapter, calibration
 
@@ -229,6 +269,8 @@ def main(argv=None):
             or min(args.seeds + [args.reserve_seed]) < 0 or (not args.no_reserve and args.reserve_seed in args.seeds)
             or len(set(args.seeds)) != len(args.seeds) or len(set(args.treatments)) != len(args.treatments)):
         ap.error("invalid budget, depths, treatments, seeds or coefficients")
+    if args.pre_change_updates is not None and not 1 <= args.pre_change_updates < args.minimum_updates:
+        ap.error("pre-change rounds must be positive and below the minimum fitted workload")
     os.chdir(ROOT)
     root = Path(args.root).resolve()
     plan_path = root / "plan.json"
@@ -264,7 +306,9 @@ def main(argv=None):
         workload = frozen["workload"]
         print(json.dumps(workload, indent=2))
         print(f"Primary: depth {args.depth}, {len(args.seeds)} seeds, {workload['unique_runs']} distinct runs; "
-              f"{workload['iterations']} matched updates each. Up to {args.reserve_count} predeclared reserve seeds from {args.reserve_seed}.")
+              f"{workload['iterations']} matched updates each. " +
+              ("Reserve replication disabled." if args.no_reserve else
+               f"Up to {args.reserve_count} predeclared reserve seeds from {args.reserve_seed}."))
         return 0
     root.mkdir(parents=True, exist_ok=True)
     write_json(root / "system_run.json", state)
@@ -276,6 +320,14 @@ def main(argv=None):
             frozen = freeze(args, adapter, calibration, available)
             write_json(plan_path, frozen)
         else:
+            if "learning_profile" in frozen:
+                from .evidence import file_sha256, load_learning_profile
+                if file_sha256(frozen["learning_profile"]) != frozen["learning_profile_sha256"]:
+                    raise ValueError("learning evidence changed after the plan was frozen")
+                learned = load_learning_profile(frozen["learning_profile"], frozen["initial_adapter"])
+                args.learning_settings = learned["settings"]
+                if args.learning_settings != frozen["shared_settings"]:
+                    raise ValueError("frozen shared learning settings differ")
             payload = Path(frozen["calibration"]).read_bytes()
             if hashlib.sha256(payload).hexdigest() != frozen["calibration_sha256"]:
                 raise ValueError("calibration changed after the plan was frozen")

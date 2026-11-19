@@ -89,6 +89,27 @@ def test_vllm_sampling_seeds_reset_per_evaluation(monkeypatch):
     assert all(row["temperature"] == 1. for row in calls)
 
 
+def test_independent_vllm_request_seeds_are_distinct_and_reproducible(monkeypatch):
+    policy = bare_policy()
+    policy.cfg.independent_sampling_seeds = True
+    policy.tokenizer = SimpleNamespace(eos_token_id=2, pad_token_id=0, decode=lambda *a, **kw: "look")
+    policy.encode_prompt = lambda prompt: [1]
+    calls = []
+    def generate(prompts, params, **kwargs):
+        calls.append(params)
+        return [SimpleNamespace(outputs=[SimpleNamespace(token_ids=[2], finish_reason="stop")]) for _ in prompts]
+    policy._llm, policy._lora_request = SimpleNamespace(generate=generate), None
+    monkeypatch.setitem(sys.modules, "vllm", SimpleNamespace(SamplingParams=lambda **kw: kw))
+    with policy.sampling(17):
+        policy._vllm_generate(["a", "b", "c"], False)
+        policy._vllm_generate(["a", "b", "c"], False)
+    with policy.sampling(17):
+        policy._vllm_generate(["a", "b", "c"], False)
+    assert calls[0] == calls[2] and calls[0] != calls[1]
+    assert len({row["seed"] for row in calls[0] + calls[1]}) == 6
+    assert all(row["temperature"] == 1. and row["top_p"] == 1. for rows in calls for row in rows)
+
+
 def test_close_frees_hf_memory_before_wake_and_shutdown(monkeypatch):
     policy = bare_policy()
     calls = []

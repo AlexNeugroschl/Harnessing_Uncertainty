@@ -18,8 +18,9 @@ def test_oracle_windows_end_and_do_not_boost_stationary_controls():
     assert controller.multiplier(4, nc) == 4
 
 
-def test_detector_is_causal_and_never_uses_regime_or_success_labels():
-    c = CuriosityConfig(boost="observed_failure", boost_updates=2, detector_warmup=2)
+@pytest.mark.parametrize("rearm", ["legacy", "stable"])
+def test_detector_is_causal_and_never_uses_regime_or_success_labels(rearm):
+    c = CuriosityConfig(boost="observed_failure", boost_updates=2, detector_warmup=2, detector_rearm=rearm)
     controller = CuriosityController(c)
     nc = NonstationaryConfig(enabled=False)
     for i in (1, 2):

@@ -16,7 +16,8 @@ import numpy as np
 from empg.prompts import parse_action
 
 UPSTREAM_REVISION = "f5d06d4f5166ca985ca420c809129a79700d904e"
-SUITE_VERSION = 3
+SUITE_VERSION = 3  # legacy protocol remains available for existing artifacts
+RECOVERY_SUITE_VERSION = 4
 PREFIX = "gym_novel_gridworlds2.contrib.polycraft."
 
 
@@ -136,9 +137,13 @@ class NovelGymEnv:
         return feedback + "\n" + json.dumps(visible, separators=(",", ":"))
 
     def _info(self, won, failures):
+        visible = self._visible()
+        # Progress novelty deliberately ignores position/facing/resource layout.
+        # Both fields are displayed in the observation; no hidden rule is used.
+        progress = {k: visible[k] for k in ("inventory", "selected")}
         return {"task": f"Craft one pogo_stick through {self.depth} dependent component recipes.",
                 "admissible": list(self.actions), "won": won,
-                "state_keys": {"parsed": _digest(self._visible())},
+                "state_keys": {"parsed": _digest(visible), "progress": _digest(progress)},
                 "intervention_metrics": {"action_failures": failures}}
 
     def step(self, action):
@@ -146,6 +151,8 @@ class NovelGymEnv:
         if self.done:
             raise RuntimeError("step after terminal state")
         failed, feedback = False, "Operation succeeded."
+        before = dict(self.entity.inventory)
+        previous_selection = self.entity.selectedItem
         if action not in self.actions:
             failed, feedback = True, "Unknown action."
         else:
@@ -165,6 +172,13 @@ class NovelGymEnv:
             feedback = "Task completed. Reward received." if won else "Task completed. No reward received."
         obs, info = self._observation(feedback), self._info(won, int(failed))
         info["intervention_metrics"]["base_won"] = int(completed)
+        harvested = sum(max(0, self.entity.inventory.get(k, 0) - before.get(k, 0)) for k in ("log", "birch_log"))
+        component = max([0, *(int(k.removeprefix("component_")) for k, v in self.entity.inventory.items()
+                             if k.startswith("component_") and v > 0), self.depth if completed else 0])
+        info["diagnostics"] = {"failed": failed,
+            "tool_selected": int(not failed and self.entity.selectedItem == "axe" and previous_selection != "axe"),
+            "harvested_items": harvested, "successful_harvest": int(action == "break_block" and harvested > 0),
+            "crafted_items": int(action.startswith("craft_") and not failed), "component_depth": component}
         return obs, float(won), self.done, info
 
     def close(self):
@@ -186,9 +200,10 @@ class NovelGymBenchmark:
             raise ValueError("novelty must be tool, recipe or resource")
         if memory or workers:
             raise ValueError("NovelGym uses compact current-state prompts and serial native stepping; set memory=false, workers=0")
-        if suite_version != SUITE_VERSION or upstream_revision != UPSTREAM_REVISION:
+        if suite_version not in (SUITE_VERSION, RECOVERY_SUITE_VERSION) or upstream_revision != UPSTREAM_REVISION:
             raise ValueError("unsupported NovelGym suite/upstream version")
         self.depth, self.novelty, self.count = recipe_depth, novelty, tasks_per_split
+        self.suite_version = suite_version
         self.history_length, self.workers, self.action_parser = history_length, workers, action_parser
         self.intervention = intervention
         if action_parser not in ("strict", "verl", "native"):
@@ -197,6 +212,8 @@ class NovelGymBenchmark:
     def tasks(self, split):
         # Reserve a fresh confirmation range after the 2M engineering probes.
         offsets = {"train": 0, "valid_seen": 1000000, "valid_unseen": 3000000}
+        if self.suite_version == RECOVERY_SUITE_VERSION:
+            offsets = {"train": 100000, "valid_seen": 1500000, "valid_unseen": 4000000}
         if split not in offsets:
             raise ValueError("unknown task split")
         return [f"craft:{self.depth}:{offsets[split] + i}" for i in range(self.count)]
@@ -236,15 +253,20 @@ class NovelGymBenchmark:
         recipes = task_config(self.depth)["recipes"]
         guide = "; ".join(f"{name}<-{'+'.join(r['input'])}" for name, r in recipes.items())
         past = "\n".join(f"{obs.splitlines()[0]} Action: {action}" for obs, action in recent)
+        skill_guide = ("Initial skill guide: when you need a log and ahead is air, approach_log; "
+                       "when ahead is log, break_block; when inventory contains a log, craft_planks. "
+                       "Choose from the current inventory and feedback; these describe only the initial mechanics.\n")
+        if self.suite_version == RECOVERY_SUITE_VERSION:
+            skill_guide = ("The guide describes initial mechanics. Feedback takes priority: after an operation fails, "
+                           "reconsider its prerequisites and try a different applicable action. "
+                           "Follow the inventory rather than continuing a failed crafting sequence.\n")
         return (f"{task_desc}\nKnown initial recipes: {guide}. Each recipe yields one item. "
                 "approach_log faces a log; approach_birch_log faces a birch log. Approaching does not collect anything. "
                 "break_block harvests the resource directly ahead into your inventory. "
                 "craft_planks consumes a harvested log and produces one plank. "
                 "select_axe equips your existing axe. Build the ingredients of missing components in order. "
                 "Actions can fail; use feedback to revise your plan.\n"
-                "Initial skill guide: when you need a log and ahead is air, approach_log; "
-                "when ahead is log, break_block; when inventory contains a log, craft_planks. "
-                "Choose from the current inventory and feedback; these describe only the initial mechanics.\n"
+                + skill_guide +
                 f"{past}\n{observation}\nActions: {', '.join(admissible)}\n"
                 + ("Return exactly one line: action: ACTION_NAME. Replace ACTION_NAME with one exact name from Actions."
                    if self.action_parser == "native" else

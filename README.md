@@ -6,23 +6,39 @@ crafting suite backed by the pinned NovelGridWorldsV2 engine. Tasks require
 multi-stage plans; tool, recipe, resource, or reward rules can change during
 training. These are custom experiments, not published NovelGym benchmark scores.
 
-The prepared 12-hour experiment compares constant curiosity, high constant
+The 12-hour experiment compares constant curiosity, high constant
 curiosity, an average-coefficient control, and temporary boosts triggered by
 either known changes or observed failures. It includes stationary controls,
 paired training seeds, baseline competence checks, and held-out evaluations.
 
 ## Run the prepared experiment
 
-From this directory in PowerShell:
+The recommended follow-up to the completed all-zero v3 experiment is the
+[development-gated recovery protocol](docs/recovery_protocol.md):
+
+```powershell
+python run_novelgym_recovery.py --prepare-only
+python run_novelgym_recovery.py --estimate-only
+python run_novelgym_recovery.py
+```
+
+This uses varied baseline demonstrations, observable action/progress diagnostics,
+a two-seed short-task learning gate, inventory/selection novelty, and a detector
+that rearms after a stable baseline. The new root is
+`runs/nonstationary/recovery_12h/`. The historical commands and artifacts below
+retain the previous experiment.
+
+## Historical v3 commands
+
+Inspect or regenerate the completed v3 experiment from PowerShell:
 
 ```powershell
 python run_novelgym_12h.py --estimate-only
-python run_novelgym_12h.py
 python run_novelgym_12h.py --report-only
 ```
 
-The first command only inspects the frozen plan. The second starts the long run;
-the full 12-hour experiment has not been launched during implementation checks.
+The v3 run completed in 11 hours 43 minutes with no changed-rule successes.
+The first command inspects that frozen plan and the second rebuilds its reports.
 Windows forwards to the existing Ubuntu-24.04 WSL GPU environment. Keep the
 machine awake and plugged in while it runs.
 
@@ -63,6 +79,9 @@ official AdaExploreBench evaluation through `run_adaexplore.py`.
 
 ```text
 run_novelgym_12h.py          prepare, validate, freeze, and execute the bounded study
+run_novelgym_recovery.py     v4 development-gated study with more adaptation rounds
+run_novelgym_pilot.py        short-task learning gate with paired development probes
+run_novelgym_diagnose.py     exact action-catalog and shared-rollout novelty diagnostics
 run_novelgym.py              configurable non-stationary experiment matrix
 run_novelgym_warmup.py       shared baseline-only skill initialization
 run_novelgym_calibrate.py    native timing, competence, and memory checks

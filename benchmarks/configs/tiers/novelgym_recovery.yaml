@@ -1,0 +1,31 @@
+# Recovery development protocol; v3 artifacts and presets stay unchanged.
+inherit: novelgym_screen.yaml
+out_dir: runs/nonstationary/recovery_pilot
+env:
+  suite_version: 4
+  recipe_depth: 2
+policy:
+  independent_sampling_seeds: true
+train:
+  iterations: 16
+  lr: 0.000003
+  entropy_coef: 0.01
+  trace_episodes: 2
+advantage:
+  curiosity:
+    key: progress
+    detector_rearm: stable
+    rearm_updates: 2
+    rearm_tolerance: 0.05
+nonstationary:
+  switch_iteration: 5
+  probe_every: 4
+  probe_tasks: 8
+  competence_min_success: 0.75
+  competence_min_successes: 4
+eval:
+  split: valid_seen
+  max_tasks: 8
+  temperature: 1.0
+  trace_tasks: 4
+  trace_steps: 74

@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parent
 DEFAULT_TIER = "paper_optimized"
 FAST_TIERS = ("paper_lora_fast", "paper_overnight", "paper_optimized", "paper_replication", "paper_lr_pilot",
               "curiosity_screen", "nonstationary", "nonstationary_screen", "nonstationary_overnight",
-              "novelgym", "novelgym_screen", "novelgym_12h")
+              "novelgym", "novelgym_screen", "novelgym_12h", "novelgym_recovery", "novelgym_recovery_12h")
 
 # Comment/uncomment one line per method to choose the default experiment.
 # --arms overrides this list. The untrained base model is evaluated separately

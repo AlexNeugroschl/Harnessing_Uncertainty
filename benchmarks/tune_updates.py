@@ -91,7 +91,9 @@ def profile(cfg, turns, samples, repeats, selected=None, memory_fraction=.75, ro
             prompt_len = cfg.policy.max_prompt_tokens or 2048
             trajs = []
             for i, (task, group) in enumerate(zip(tasks, groups)):
-                step = Step([3] * prompt_len, [4 + i % 2] * cfg.policy.max_new_tokens,
+                # Distinct prompts force every row through the kernel even when
+                # production response deduplication is enabled.
+                step = Step([3 + i] * prompt_len, [4 + i % 2] * cfg.policy.max_new_tokens,
                             "synthetic context stress", "look", True, state_keys={"obs": "next"})
                 trajs.append(Trajectory(task, group, [step], won=bool(i % 2),
                                         init_keys={"obs": "initial"}))

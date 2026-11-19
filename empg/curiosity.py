@@ -41,6 +41,9 @@ class CuriosityConfig:
     failure_threshold: float = 0.15  # increase over prior EMA, not absolute failure rate
     failure_ema: float = 0.2
     detector_warmup: int = 2
+    detector_rearm: str = "legacy"  # legacy | stable: one event until a new stable failure baseline
+    rearm_updates: int = 2
+    rearm_tolerance: float = 0.05
 
     def validate(self):
         if self.boost not in ("none", "oracle_window", "clock_window", "observed_failure"):
@@ -54,6 +57,11 @@ class CuriosityConfig:
             raise ValueError("curiosity boost_updates/detector_warmup must be positive integers")
         if not 0 < self.failure_ema <= 1 or not 0 < self.failure_threshold <= 1:
             raise ValueError("invalid curiosity failure detector parameters")
+        if (self.detector_rearm not in ("legacy", "stable")
+                or not isinstance(self.rearm_updates, int) or isinstance(self.rearm_updates, bool)
+                or self.rearm_updates < 1 or not 0 < self.rearm_tolerance <= 1
+                or (self.detector_rearm == "stable" and self.rearm_tolerance >= self.failure_threshold)):
+            raise ValueError("invalid curiosity detector rearming parameters")
 
 
 class CuriosityController:
@@ -71,6 +79,8 @@ class CuriosityController:
         self.until = 0
         self.start = 0
         self.triggered = False
+        self.armed = True
+        self.stable_updates = 0
 
     def multiplier(self, iteration, nonstationary):
         c = self.cfg
@@ -94,12 +104,22 @@ class CuriosityController:
         if failure_rate is None or not np.isfinite(failure_rate):
             raise ValueError("observed_failure boost requires observable action failure feedback")
         if (self.ema is not None and self.seen >= self.cfg.detector_warmup
+                and self.armed
                 and iteration > self.until
                 and failure_rate - self.ema >= self.cfg.failure_threshold):
             # The next update is the first affected one; no hindsight weighting.
             self.until = iteration + self.cfg.boost_updates
             self.start = iteration + 1
             self.triggered = True
+            if self.cfg.detector_rearm == "stable":
+                self.armed, self.stable_updates = False, 0
+        elif self.cfg.detector_rearm == "stable" and not self.armed:
+            # Compare to the PRIOR EMA. Persistent drift cannot rearm merely
+            # because the boost window ended. A stable new baseline can.
+            stable = iteration > self.until and abs(failure_rate - self.ema) <= self.cfg.rearm_tolerance
+            self.stable_updates = self.stable_updates + 1 if stable else 0
+            if self.stable_updates >= self.cfg.rearm_updates:
+                self.armed = True
         alpha = self.cfg.failure_ema
         self.ema = failure_rate if self.ema is None else (1 - alpha) * self.ema + alpha * failure_rate
         self.seen += 1

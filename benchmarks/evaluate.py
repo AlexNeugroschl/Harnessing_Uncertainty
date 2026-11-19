@@ -69,6 +69,8 @@ def evaluation_protocol(cfg: Config, regime=None) -> dict:
         protocol["sampling_seed"] = ec.sampling_seed
     if cfg.policy.max_prompt_tokens:
         protocol["max_prompt_tokens"] = cfg.policy.max_prompt_tokens
+    if cfg.policy.independent_sampling_seeds:
+        protocol["independent_sampling_seeds"] = True
     if cfg.env.get("memory", False):
         protocol["memory"] = True
     if cfg.policy.dtype != "bfloat16":
@@ -125,10 +127,13 @@ def evaluate(policy: LLMPolicy, cfg: Config, log=print, *, regime=None, benchmar
                 by_type[bench.task_type(tr.task)].append(tr.won)
                 per_task.append({"task": tr.task, "type": bench.task_type(tr.task),
                                  "won": tr.won, "steps": len(tr.steps), "invalid": tr.n_invalid})
-                if cfg.benchmark == "novelgym" and len(per_task) <= 2:
+                if cfg.benchmark == "novelgym" and len(per_task) <= ec.trace_tasks:
                     per_task[-1]["trace"] = [{"action": step.action, "response": step.text,
-                                             "feedback": step.obs, "valid": step.valid}
-                                            for step in tr.steps[:16]]
+                                             "feedback": step.obs, "valid": step.valid, "diagnostics": step.diagnostics}
+                                            for step in tr.steps[:ec.trace_steps]]
+                if cfg.benchmark == "novelgym":
+                    from empg.diagnostics import behavior_metrics
+                    per_task[-1]["behavior"] = behavior_metrics([tr])
                 if nc.enabled or cfg.train.reward_source == "environment":
                     per_task[-1].update(env_return=tr.env_return, **tr.intervention_metrics)
             for k, v in response_lengths(trajs).items():
